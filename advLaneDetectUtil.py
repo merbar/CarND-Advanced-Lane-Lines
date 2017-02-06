@@ -11,19 +11,19 @@ def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
     '''
     # color space conversion
     if colorspace == 'gray':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img = cv2.cvtColor(img, cv2.COLOR_RGBGRAY)
     elif colorspace == 'hsv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     elif colorspace == 'hls':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
     elif colorspace == 'lab':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
     elif colorspace == 'luv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
     elif colorspace == 'yuv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
     else:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2RGB)
     
     # isolate channel
     if colorspace != 'gray':
@@ -39,7 +39,7 @@ def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
         img = cv2.bitwise_and(img, imgMask)
     return img
                 
-def makeBinaryImg(img, threshold=(0,255), mode='simple', sobel_kernel=3):
+def makeBinaryImg(img, threshold=(0,255), mode='simple', sobel_kernel=7):
     '''
     Returns a binary image based on the following inputs
     - threshold
@@ -77,6 +77,43 @@ def makeBinaryImg(img, threshold=(0,255), mode='simple', sobel_kernel=3):
     return binary
 
 
+def denoiseBinary(binImg, binImgReplace, stepSize=50, noiseColumnThresh = 120, pixelNumThres = 150):
+    '''
+    Detects areas of noise and replaces them with the same chunk from the second image OR zero if second image is also noisy
+    Noise is defined as lots of positive values on the x-axis
+    inputs: image to remove noise from
+            image to use for replacement
+            [chunks of the image in y that get processed]
+            [number of columns with a positive value to use as noise threshold]
+    '''
+    out_img = binImg.copy()
+    img_size = (binImg.shape[1], binImg.shape[0])
+    for y in np.arange(0, img_size[1], stepSize):
+        topRange = y+stepSize
+        histBinImg = np.sum(binImg[y:topRange:], axis=0)
+        histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
+        nonzeroX_histBin = histBinImg.nonzero()[0]
+        nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
+        if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
+            if (len(nonzeroX_histBinRepl) <= noiseColumnThresh):
+                out_img[y:topRange:] = binImgReplace[y:topRange:]
+            else:
+                out_img[y:topRange:] = 0
+    # special case for the remainder in y
+    if y < img_size[1]:
+        topRange = img_size[1]
+        remainder = topRange-y
+        noiseColumnThresh = noiseColumnThresh * (remainder/stepSize)
+        histBinImg = np.sum(binImg[y:topRange:], axis=0)
+        histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
+        if (len(histBinImg.nonzero()[0]) > noiseColumnThresh):
+            if (len(histBinImgReplace.nonzero()[0]) <= noiseColumnThresh):
+                out_img[y:topRange:] = binImgReplace[y:topRange:]
+            else:
+                out_img[y:topRange:] = 0
+    return out_img
+
+
 def writeImg(img, outFile, binary=False):
     if binary:
         # scale to 8-bit (0 - 255)
@@ -98,7 +135,7 @@ def findLaneBases(binary_warped):
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
     return leftx_base, rightx_base
 
-def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=50, lanePxColor=(0,0,220), visCircleRad=5, fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, thickness=2):
+def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, lanePxColor=(0,0,220), visCircleRad=5, fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, thickness=2):
     '''
     input: binary warped img
            origin of lane in x
@@ -112,7 +149,8 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=50, l
     based on: Udacity Project 4 lesson, unit 33
     '''
     nWindowsForSuccess = np.floor(nwindows/3)
-    filterPrevWindowThres = 10 # make threshold large to disable filtering
+    filterPrevWindowThresFlipSign = 20 # make threshold large to disable filtering
+    filterPrevWindowThres = 70 # make threshold large to disable filtering
     
     # Create an output image to draw on and  visualize the result
     size = binary_warped.shape[0], binary_warped.shape[1], 3
@@ -151,19 +189,21 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=50, l
         if len(good_inds) > minpix:
             x_current = np.int(np.mean(nonzerox[good_inds]))            
             x_currentChange = x_current - x_prev
-            # FILTER: If sign flips and value change is above threshold, ignore window (if sign doesn't flip or change is below threshold)
-            # But have to ignore influence of first window (very large change in x)
-            if ((x_prevChange<0)==(x_currentChange<0)) or ((x_prevChange-x_currentChange) < filterPrevWindowThres) or window==1:
+            # FILTER: If sign flips and value change is above threshold, ignore window
+            #         But have to ignore influence of first window (always has very large change in x)
+            if (((x_prevChange<0)==(x_currentChange<0)) or (abs(x_prevChange-x_currentChange) < filterPrevWindowThresFlipSign) or window==1):
                 # Append indices to the lists
                 lane_inds.append(good_inds)
                 valid_window = True
                 valid_window_count += 1
             else:
                 # if it turns out bad, reset location and keep moving ROI for next window in the previous direction
-                #x_current = x_prev+x_prevChange
-                # if it turns out bad, reset location
-                x_current = x_prev
+                x_current = int(x_prev+(x_prevChange/2))
+                 # if it turns out bad, reset location
+                #x_current = x_prev
         else:
+            #x_current = int(x_prev+(x_prevChange/2))
+            #x_currentChange = x_current - x_prev
             x_currentChange = 0
             
         # Draw the windows on the visualization image
@@ -195,6 +235,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=50, l
     fit = np.polyfit(y, x, 2)
     fit_f = np.poly1d(fit)
     return True, fit, data_img
+
 
 def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneColor=(0,150,0)):
     '''
