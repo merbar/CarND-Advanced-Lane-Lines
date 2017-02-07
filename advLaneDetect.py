@@ -7,7 +7,7 @@ import advLaneDetectUtil as laneUtil
 from moviepy.editor import VideoFileClip
 
 # GLOBALS
-warpedImgSize = (800, 1000)
+warpedImgSize = (500, 1500)
 #warpedImgSize = (img.shape[1], img.shape[0])
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30/warpedImgSize[1] # meters per pixel in y dimension
@@ -28,7 +28,8 @@ class Line:
         self.detected = False 
         self.detectionFailedCount = 0
         self.detectionFailedCountThresh = 5
-        self.filterSize = 8
+        self.filterSize = 24
+        self.poly0ChangeThresh = 0.00002 # not used yet
         self.poly1ChangeThresh = 0.2
         # x values of the last n fits of the line
         #self.recent_xfitted = [] 
@@ -93,18 +94,20 @@ def process_image(img):
     #dstImg = cv2.cvtColor(dstImg, cv2.COLOR_BGR2RGB)
     #dstImg = cv2.cvtColor(dstImg, cv2.COLOR_RGB2BGR)
     # Blur
-    kernel_size = 5
-    dstImg = cv2.GaussianBlur(dstImg, (kernel_size, kernel_size), 0)
+    kernel_size = 13
+    dstImgBlur = cv2.GaussianBlur(dstImg, (kernel_size, kernel_size), 0)
     
     # get useful greyscale channels
     hls_s = laneUtil.makeGrayImg(dstImg, colorspace='hls', useChannel=2)
+    hls_s_blur = laneUtil.makeGrayImg(dstImgBlur, colorspace='hls', useChannel=2)
     hsv_v = laneUtil.makeGrayImg(dstImg, colorspace='hsv', useChannel=2)
+    hsv_v_blur = laneUtil.makeGrayImg(dstImgBlur, colorspace='hsv', useChannel=2)
     hls_l = laneUtil.makeGrayImg(dstImg, colorspace='hls', useChannel=1)
-    gray = cv2.cvtColor(dstImg, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(dstImgBlur, cv2.COLOR_RGB2GRAY)
 
     # Isolate white and yellow
     hsv = cv2.cvtColor(dstImg, cv2.COLOR_RGB2HSV)
-    lower_yellow = np.array([15,100,100])
+    lower_yellow = np.array([10,80,100])
     upper_yellow = np.array([70,255,255])
     lower_white = np.array([0,0,200])
     upper_white = np.array([255,30,255])
@@ -113,30 +116,55 @@ def process_image(img):
     maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
     bin_color_tresh = np.zeros_like(hls_s)
     bin_color_tresh[maskYellowWhite > 0] = 1
+    # cut out noise on car hood
+    bin_color_tresh[int(img_size[1]-50):int(img_size[1]):] = 0
     
     # good general result, deals well with low contrast
-    bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(150,255), mode='simple')
+    bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(100,255), mode='simple')
     # generally better result than hls_s_thresh
     # deals VERY poorly with low contrast road surface, but deals GREAT with shadows
-    bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(210,255), mode='simple')
+    bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(200,255), mode='simple')
     # better in all aspects than sobelX or dir. Using non-equalized hsv_v because it has more contrast
-    bin_hsv_v_mag = laneUtil.makeBinaryImg(hsv_v, threshold=(50,255), mode='mag')
-
-    bin_hls_l_sobelX = laneUtil.makeBinaryImg(hls_l, threshold=(30,100), mode='sobelX')
-    bin_hls_s_sobelX =laneUtil.makeBinaryImg(hls_s, threshold=(30,100), mode='sobelX')
+    bin_hsv_v_mag = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(50,255), mode='mag')
+    bin_hsv_v_sobelX = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(30,120), sobel_kernel=3, mode='sobelX')
+    bin_hls_s_sobelX =laneUtil.makeBinaryImg(hls_s, threshold=(30,120), sobel_kernel=3, mode='sobelX')
     bin_sobelX = np.zeros_like(hls_s)
-    bin_sobelX[(bin_hls_l_sobelX > 0) | (bin_hls_s_sobelX > 0)] = 1
+    bin_sobelX[(bin_hsv_v_sobelX > 0) | (bin_hsv_v_sobelX > 0)] = 1
 
-    bin_mag = laneUtil.makeBinaryImg(gray, threshold=(40,255), mode='mag')
-    bin_dir = laneUtil.makeBinaryImg(gray, threshold=(0.5, 1.), mode='dir')
+    # combine bright areas of hsv_v and hls_s
+    test = np.zeros_like(hls_s)
+    #test[] 
+
+    gray_sobelX = laneUtil.binaryToGray(bin_sobelX)
+
+    bin_mag = laneUtil.makeBinaryImg(gray_sobelX, threshold=(30,255), sobel_kernel=3, mode='mag')
+    bin_dir = laneUtil.makeBinaryImg(gray_sobelX, threshold=(0.7, 1.3), sobel_kernel=5, mode='dir')
+
+    kernel = np.ones((4,4),np.uint8)
+    bin_dir_denoise = cv2.erode(bin_dir,kernel,iterations = 1)
+    bin_dir_denoise = cv2.dilate(bin_dir_denoise,kernel,iterations = 5)
 
     bin_combined_img = np.zeros_like(hls_s)
-    bin_combined_img[(bin_color_tresh > 0) | (bin_sobelX > 0) | (bin_hls_s_thresh > 0)] = 1
+    bin_combined_img[(bin_color_tresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
+    #bin_combined_img[(bin_color_tresh > 0) | ((bin_hls_s_thresh > 0) & (bin_dir_denoise > 0))] = 1
+    #bin_combined_img[(bin_color_tresh > 0) | (bin_hsv_v_thresh > 0)] = 1
 
     binFolder = 'vid_debug/bin'
     dstImg = cv2.cvtColor(dstImg, cv2.COLOR_BGR2RGB)
     outFile = '{}/{}_dst.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(dstImg, outFile, binary=False)
+    
+    outFile = '{}/{}_hsv_v.jpg'.format(binFolder, imgNumber)
+    #laneUtil.writeImg(hsv_v, outFile, binary=False)
+
+    outFile = '{}/{}_hls_s.jpg'.format(binFolder, imgNumber)
+    #laneUtil.writeImg(hls_s, outFile, binary=False)
+
+    outFile = '{}/{}_bin_dir.jpg'.format(binFolder, imgNumber)
+    #laneUtil.writeImg(bin_dir, outFile, binary=True)
+
+    outFile = '{}/{}_bin_dir_denoise.jpg'.format(binFolder, imgNumber)
+    #laneUtil.writeImg(bin_dir_denoise, outFile, binary=True)
 
     outFile = '{}/{}_bin_color_tresh.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(bin_color_tresh, outFile, binary=True)
@@ -146,21 +174,10 @@ def process_image(img):
 
     outFile = '{}/{}_bin_hsv_v_thresh.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(bin_hsv_v_thresh, outFile, binary=True)
-
-    outFile = '{}/{}_bin_hsv_v_mag.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(bin_hsv_v_mag, outFile, binary=True)
-
-    outFile = '{}/{}_bin_sobelX.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(bin_sobelX, outFile, binary=True)
-
-    outFile = '{}/{}bin_mag.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(bin_mag, outFile, binary=True)
-
-    outFile = '{}/{}bin_dir.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(bin_dir, outFile, binary=True)
-
+    
     outFile = '{}/{}_bin_combined.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(bin_combined_img, outFile, binary=True)
+
 
     # Perspective transform
     
@@ -170,13 +187,19 @@ def process_image(img):
          [1280, 670],
          [710, 448],
          [570, 448]])
+    # projection for 25 meters out
+    src25m = np.float32(
+        [[30, 700],
+         [1250, 700],
+         [732, 462],
+         [548, 462]])
     # projection for 20 meters out
     src20m = np.float32(
         [[30, 700],
          [1250, 700],
          [732, 462],
          [548, 462]])
-    src = src30m
+    src = src20m
 
     dst = np.float32(
         [[0, warpedImgSize[1]],
@@ -193,11 +216,24 @@ def process_image(img):
 
     warped_combined_bin = cv2.warpPerspective(bin_combined_img, M, warpedImgSize, flags=cv2.INTER_LINEAR)
     warped_v_bin = cv2.warpPerspective(bin_hsv_v_thresh, M, warpedImgSize, flags=cv2.INTER_LINEAR)
-    
+    warped_s_bin = cv2.warpPerspective(bin_hls_s_thresh, M, warpedImgSize, flags=cv2.INTER_LINEAR)
+    warped_color_bin = cv2.warpPerspective(bin_color_tresh, M, warpedImgSize, flags=cv2.INTER_LINEAR)
+    warped_dst = cv2.warpPerspective(dstImg, M, warpedImgSize, flags=cv2.INTER_LINEAR)
     # new approach to clean up binary image: do post processing on warped images (because region of interest is "baked in")
+    #warped_bin = warped_combined_bin
+    #warped_bin_1stPass = laneUtil.denoiseBinary(warped_combined_bin, warped_s_bin)
+    #warped_bin_2ndPass = laneUtil.denoiseBinary(warped_combined_bin, warped_color_bin)
     warped_bin = np.zeros_like(warped_combined_bin)
-    warped_bin = laneUtil.denoiseBinary(warped_combined_bin, warped_v_bin)    
+    warped_bin = laneUtil.denoiseBinary(warped_combined_bin, [warped_s_bin, warped_color_bin])
+
+    # TODO P1: Figure out shady/low contrast image and correlate best candidate binary images
     
+    outFile = '{}/{}_warped_bin.jpg'.format(binFolder, imgNumber)
+    laneUtil.writeImg(warped_bin, outFile, binary=True)
+
+    outFile = '{}/{}_warped_dst.jpg'.format(binFolder, imgNumber)
+    laneUtil.writeImg(warped_dst, outFile, binary=False)
+
     leftCrvRad = 0
     rightCrvRad = 0
 
@@ -317,8 +353,14 @@ def main():
         mtx, dist, rvecs, tvecs = pickle.load(fp)
 
     videoFile = sys.argv[1]
-    clip = VideoFileClip(videoFile).subclip('00:00:23.00','00:00:23.01')
+    # straight road
+    #clip = VideoFileClip(videoFile).subclip('00:00:16.15','00:00:16.15')
+    # low contrast!
+    #clip = VideoFileClip(videoFile).subclip('00:00:40.00','00:00:40.00')
+    #shadows and contrast!
+    #clip = VideoFileClip(videoFile).subclip('00:00:41.38','00:00:41.38')
     #clip = VideoFileClip(videoFile).subclip(19,26)
+    clip = VideoFileClip(videoFile).subclip(37,43)
     #clip = VideoFileClip(videoFile)
     proc_clip = clip.fl_image(process_image)
     proc_output = '{}_proc.mp4'.format(videoFile.split('.')[0])

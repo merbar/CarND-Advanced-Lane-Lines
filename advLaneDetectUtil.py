@@ -22,8 +22,6 @@ def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
         img = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
     elif colorspace == 'yuv':
         img = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
-    else:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2RGB)
     
     # isolate channel
     if colorspace != 'gray':
@@ -65,24 +63,32 @@ def makeBinaryImg(img, threshold=(0,255), mode='simple', sobel_kernel=7):
         # create a binary mask where mag thresholds are met
         binary[(sobel_scale >= threshold[0]) & (sobel_scale <= threshold[1])] = 1
     elif mode == 'dir':
-        sobelX_abs = np.absolute(cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel))
-        scaled_sobelX = np.uint8(255*sobelX_abs/np.max(sobelX_abs))
-        sobelY_abs = np.absolute(cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=sobel_kernel))
-        scaled_sobelY = np.uint8(255*sobelY_abs/np.max(sobelY_abs))
+        sobelX_abs = np.abs(cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel))
+        #scaled_sobelX = np.uint8(255*sobelX_abs/np.max(sobelX_abs))
+        sobelY_abs = np.abs(cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=sobel_kernel))
+        #scaled_sobelY = np.uint8(255*sobelY_abs/np.max(sobelY_abs))
         # use np.arctan2(abs_sobely, abs_sobelx) to calculate the direction of the gradient 
-        gradients = np.arctan2(scaled_sobelY, scaled_sobelX)
+        gradients = np.arctan2(sobelY_abs, sobelX_abs)
         binary[(gradients >= threshold[0]) & (gradients <= threshold[1])] = 1
     else:
         binary[(img >= threshold[0]) & (img <= threshold[1])] = 1  
     return binary
 
+def binaryToGray(img):
+    '''
+    returns gray image from binary input
+    '''
+    return np.uint8(255*img/np.max(img))
 
-def denoiseBinary(binImg, binImgReplace, stepSize=50, noiseColumnThresh = 120, pixelNumThres = 150):
+
+def denoiseBinary(binImg, binImgsReplace, stepSize=50, noiseColumnThresh = 110, pixelNumThres = 110):
     '''
     Detects areas of noise and replaces them with the same chunk from the second image OR zero if second image is also noisy
     Noise is defined as lots of positive values on the x-axis
+    TODO: Clean up left and right half separately!
+    TODO: If more than one good replacement candidate is found, it simply uses the one with the highest index. Make it smarter!
     inputs: image to remove noise from
-            image to use for replacement
+            array of images to use for replacement
             [chunks of the image in y that get processed]
             [number of columns with a positive value to use as noise threshold]
     '''
@@ -91,26 +97,32 @@ def denoiseBinary(binImg, binImgReplace, stepSize=50, noiseColumnThresh = 120, p
     for y in np.arange(0, img_size[1], stepSize):
         topRange = y+stepSize
         histBinImg = np.sum(binImg[y:topRange:], axis=0)
-        histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
         nonzeroX_histBin = histBinImg.nonzero()[0]
-        nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
-        if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
-            if (len(nonzeroX_histBinRepl) <= noiseColumnThresh):
-                out_img[y:topRange:] = binImgReplace[y:topRange:]
-            else:
-                out_img[y:topRange:] = 0
+
+        for binImgReplace in binImgsReplace:
+            histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
+            nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
+            if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
+                if (len(set(np.unique(nonzeroX_histBinRepl))) <= noiseColumnThresh):
+                    out_img[y:topRange:] = binImgReplace[y:topRange:]
+                else:
+                    out_img[y:topRange:] = 0
     # special case for the remainder in y
     if y < img_size[1]:
         topRange = img_size[1]
         remainder = topRange-y
         noiseColumnThresh = noiseColumnThresh * (remainder/stepSize)
+        pixelNumThres = pixelNumThres * (remainder/stepSize)
         histBinImg = np.sum(binImg[y:topRange:], axis=0)
-        histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
-        if (len(histBinImg.nonzero()[0]) > noiseColumnThresh):
-            if (len(histBinImgReplace.nonzero()[0]) <= noiseColumnThresh):
-                out_img[y:topRange:] = binImgReplace[y:topRange:]
-            else:
-                out_img[y:topRange:] = 0
+        nonzeroX_histBin = histBinImg.nonzero()[0]
+        for binImgReplace in binImgsReplace:
+            histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
+            nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
+            if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
+                if (len(set(np.unique(nonzeroX_histBinRepl))) <= noiseColumnThresh):
+                    out_img[y:topRange:] = binImgReplace[y:topRange:]
+                else:
+                    out_img[y:topRange:] = 0
     return out_img
 
 
@@ -285,7 +297,7 @@ def getCurveRadius(fit_f, imgSizeY, xm_per_pix, ym_per_pix):
     '''   
     ploty = np.linspace(0, imgSizeY-1, imgSizeY)
     # Define y-value where we want radius of curvature. Choose the maximum y-value, corresponding to the bottom of the image
-    y_eval = np.max(ploty)
+    y_eval = np.max(ploty)-50
     x = fit_f(ploty)
 
     # Fit new polynomials to x,y in world space
