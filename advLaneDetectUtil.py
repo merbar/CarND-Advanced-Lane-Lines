@@ -11,17 +11,17 @@ def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
     '''
     # color space conversion
     if colorspace == 'gray':
-        img = cv2.cvtColor(img, cv2.COLOR_RGBGRAY)
+        img = cv2.cvtColor(img, cv2.COLOR_BGRGRAY)
     elif colorspace == 'hsv':
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     elif colorspace == 'hls':
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
     elif colorspace == 'lab':
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     elif colorspace == 'luv':
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2LUV)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
     elif colorspace == 'yuv':
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
     
     # isolate channel
     if colorspace != 'gray':
@@ -81,32 +81,28 @@ def binaryToGray(img):
     return np.uint8(255*img/np.max(img))
 
 
-def denoiseBinary(binImg, binImgsReplace, stepSize=50, noiseColumnThresh = 110, pixelNumThres = 110):
+def denoiseBinary(binImg, stepSize=50, noiseColumnThresh = 110):
     '''
-    Detects areas of noise and replaces them with the same chunk from the second image OR zero if second image is also noisy
+    Goes through the image in chunks to detect areas of noise and replaces them with zero. If too many chunks are noisy, image is discarded.
     Noise is defined as lots of positive values on the x-axis
-    TODO: Clean up left and right half separately!
-    TODO: If more than one good replacement candidate is found, it simply uses the one with the highest index. Make it smarter!
     inputs: image to remove noise from
-            array of images to use for replacement
             [chunks of the image in y that get processed]
             [number of columns with a positive value to use as noise threshold]
+            []
     '''
-    out_img = binImg.copy()
+    pixelNumThres = noiseColumnThresh
     img_size = (binImg.shape[1], binImg.shape[0])
+    empty_img = np.zeros_like(binImg)
+    out_img = binImg.copy()
+    noiseCount = 0
+    noiseCountTresh = (img_size[0]/stepSize)*0.3
     for y in np.arange(0, img_size[1], stepSize):
         topRange = y+stepSize
         histBinImg = np.sum(binImg[y:topRange:], axis=0)
         nonzeroX_histBin = histBinImg.nonzero()[0]
-
-        for binImgReplace in binImgsReplace:
-            histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
-            nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
-            if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
-                if (len(set(np.unique(nonzeroX_histBinRepl))) <= noiseColumnThresh):
-                    out_img[y:topRange:] = binImgReplace[y:topRange:]
-                else:
-                    out_img[y:topRange:] = 0
+        if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
+            out_img[y:topRange:] = 0
+            noiseCount +=1
     # special case for the remainder in y
     if y < img_size[1]:
         topRange = img_size[1]
@@ -115,16 +111,14 @@ def denoiseBinary(binImg, binImgsReplace, stepSize=50, noiseColumnThresh = 110, 
         pixelNumThres = pixelNumThres * (remainder/stepSize)
         histBinImg = np.sum(binImg[y:topRange:], axis=0)
         nonzeroX_histBin = histBinImg.nonzero()[0]
-        for binImgReplace in binImgsReplace:
-            histBinImgReplace = np.sum(binImgReplace[y:topRange:], axis=0)
-            nonzeroX_histBinRepl = histBinImgReplace.nonzero()[0]
-            if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
-                if (len(set(np.unique(nonzeroX_histBinRepl))) <= noiseColumnThresh):
-                    out_img[y:topRange:] = binImgReplace[y:topRange:]
-                else:
-                    out_img[y:topRange:] = 0
-    return out_img
-
+        if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
+            out_img[y:topRange:] = 0
+            noiseCount +=1
+    # if more than 1/3 of image is noisy, throw it out
+    if noiseCount > noiseCountTresh:
+        return empty_img
+    else:
+        return out_img
 
 def writeImg(img, outFile, binary=False):
     if binary:
@@ -147,7 +141,11 @@ def findLaneBases(binary_warped):
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
     return leftx_base, rightx_base
 
-def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, lanePxColor=(0,0,220), visCircleRad=5, fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, thickness=2):
+def lineConfidence(lanePxY):
+    confidence = np.amax(lanePxY) - np.amin(lanePxY)
+    return confidence
+
+def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, lanePxColor=(0,0,220), visCircleRad=5, fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.5, thickness=1):
     '''
     input: binary warped img
            origin of lane in x
@@ -234,7 +232,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, l
         
     # check if enough good points were detected for lane to be valid
     if valid_window_count < nWindowsForSuccess:
-        return False, None, data_img
+        return False, None, data_img, 0.
 
     # Concatenate the arrays of indices
     lane_inds = np.concatenate(lane_inds)
@@ -246,8 +244,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, l
     # Fit a second order polynomial to each
     fit = np.polyfit(y, x, 2)
     fit_f = np.poly1d(fit)
-    return True, fit, data_img
-
+    return True, fit, data_img, lineConfidence(y)
 
 def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneColor=(0,150,0)):
     '''
@@ -284,8 +281,9 @@ def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneCo
     # Draw the lane onto the warped blank image
     cv2.fillPoly(data_img, np.int_([line_pts]), laneColor)    
     # Color in line pixels
-    data_img[nonzeroy[lane_inds], nonzerox[lane_inds]] = lanePxColor
-    return True, fit, data_img
+    #data_img[nonzeroy[lane_inds], nonzerox[lane_inds]] = lanePxColor
+    data_img[y, x] = lanePxColor
+    return True, fit, data_img, lineConfidence(y)
 
 def getCurveRadius(fit_f, imgSizeY, xm_per_pix, ym_per_pix):
     '''
@@ -320,7 +318,23 @@ def getCarPositionOffCenter(fit_f_left, fit_f_right, imgSizeX, imgSizeY, xm_per_
     offset = ((imgSizeX/2)-centerOfLanes)*xm_per_pix
     return offset
 
-def makeFinalImage(img, fit_f_left, fit_f_right, Minv, curvature, offCenter, imgSizeX, imgSizeY, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.5, thickness=2):
+def getLaneWidth(fit_f_left, fit_f_right, imgSizeX, imgSizeY, xm_per_pix):
+    '''
+    inputs: function for left and right lanes
+            size of image in x
+            scale of image in meters/pixel in x
+    returns: lane width in pixels and meters
+    '''
+    base_left = fit_f_left(imgSizeY)
+    base_right = fit_f_right(imgSizeY)
+    #centerOfLanes = base_left+((base_right-base_left)/2)
+    laneWidthPx = int(base_right - base_left)
+    laneWidthMeters = laneWidthPx * xm_per_pix
+    return laneWidthPx, laneWidthMeters
+
+
+
+def makeFinalDataImage(img, fit_f_left, fit_f_right, Minv, curvature, offCenter, imgSizeX, imgSizeY, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.5, thickness=1):
     '''
     inputs: original undistorted image
             function for left and right lanes
