@@ -12,7 +12,8 @@ warpedImgSize = (500, 1500)
 #warpedImgSize = (img.shape[1], img.shape[0])
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30/warpedImgSize[1] # meters per pixel in y dimension
-xm_per_pix = 5.3/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
+xm_per_pix = 6.0/warpedImgSize[0] # meters per pixel in x dimension for 15m projection
+#xm_per_pix = 5.3/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
 #xm_per_pix = 6.2/warpedImgSize[0] # meters per pixel in x dimension for 30m projection
 slidingWindow_margin = int(warpedImgSize[0]/10)
 slidingWindow_windows = 9
@@ -50,7 +51,12 @@ def process_image(img):
          [1250, 700],
          [732, 462],
          [548, 462]])
-    src = src20m
+    src15m = np.float32(
+        [[30, 700],
+         [1250, 700],
+         [748, 475],
+         [532, 475]])
+    src = src15m
     dst = np.float32(
         [[0, warpedImgSize[1]],
          [warpedImgSize[0], warpedImgSize[1]],
