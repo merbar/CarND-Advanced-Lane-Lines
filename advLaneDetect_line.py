@@ -18,6 +18,7 @@ class Line:
         self.confidenceThresh = 0.6
         self.mirrorFac = 0.
         self.side = side
+        self.laneWidth = 3.7 / self.xm_per_pix
         # x values of the last n fits of the line
         #self.recent_xfitted = [] 
         #average x values of the fitted line over the last n iterations
@@ -43,6 +44,9 @@ class Line:
     def addOtherLine(self, otherLine):
         self.otherLine = otherLine
 
+    def setLaneWidth(self, laneWidth):
+        self.laneWidth = laneWidth
+
     def fitLine(self, fit):
         if fit != None:
             # START BLEND IN MIRRORED/PREVIOUS FIT ACCORDING TO CONFIDENCE
@@ -51,14 +55,17 @@ class Line:
                 mirrorFit = None
                 prevFit = None
                 prevFit = self.getPreviousLine()
-                if (self.confidence < self.otherLine.confidence):
+                if (self.confidence < self.otherLine.confidence) & (self.otherLine.confidence > self.confidenceThresh):
                     mirrorFit = self.getMirroredOtherLine()
                 if ((prevFit != None) & (self.confidence < 0.3)): 
                     fit = prevFit
                 if (mirrorFit != None):
                     # exponential to amplify blending on lower confidence fits
-                    confidenceFac = (self.confidence**2) / (self.otherLine.confidence**2)
-                    #confidenceFac = self.confidence / self.otherLine.confidence
+                    #confidenceFac = (self.confidence**2) / (self.otherLine.confidence**2)
+                    if self.confidence > 0.:
+                        confidenceFac = self.confidence / self.otherLine.confidence
+                    else:
+                        confidenceFac = 0.
                     fit = (confidenceFac*fit) + ((1-confidenceFac)*mirrorFit)
             # END BLEND IN MIRRORED/PREVIOUS FIT ACCORDING TO CONFIDENCE            
             self.recent_fits.append(fit)
@@ -68,7 +75,7 @@ class Line:
             self.best_fit_f = np.poly1d(self.best_fit)
             self.radius_of_curvature = laneUtil.getCurveRadius(self.best_fit_f, self.warpedImgSize[1], self.xm_per_pix, self.ym_per_pix)
         else:
-            print('all broken')
+            # all broken down
             # if fit is None, it means:
             # - it went all the way back to slidingWindows detection and that failed
             # - mirroring the other lane failed as well because that one didn't have a valid detection
@@ -82,6 +89,7 @@ class Line:
             return None
 
     def reusePreviousLine(self):
+        # NOT USED
         self.detectionFailedCount += 1
         if (self.detectionFailedCount < self.detectionFailedCountThresh):
             self.detected = True
@@ -91,25 +99,16 @@ class Line:
 
     def getMirroredOtherLine(self):
         if self.otherLine.detected:
-            # plot points from other line over to this with lane width = 3.7m
-            laneWidthPx = 3.7 / self.xm_per_pix
-            #derivative_f = np.polyder(self.otherLine.best_fit)
-            #x = self.otherLine.best_fit_f(self.fity)+(derivative_f(self.fity)*laneWidthPx)
             # VERY simplified projection
             if self.side == 'right':
-                x = self.otherLine.best_fit_f(self.fity)+laneWidthPx
+                x = self.otherLine.best_fit_f(self.fity)+self.laneWidth
             else:
-                x = self.otherLine.best_fit_f(self.fity)-laneWidthPx            
+                x = self.otherLine.best_fit_f(self.fity)-self.laneWidth            
             # Fit a second order polynomial to each
             fit = np.polyfit(self.fity, x, 2)
             return fit
         else:
             return None
-
-    def computeLineConfidence(self):
-        # DUMMY FUNCTION FOR NOW
-        confidence = np.amax(lanePxY) - np.amin(lanePxY)
-        self.confidence = 1
 
     def updateData(self, fit, fitConfidence):
         '''
@@ -119,6 +118,7 @@ class Line:
         if fitConfidence > 0.:
             self.confidence = fitConfidence / self.warpedImgSize[1]# scale confidence from fit function to 0..1
             self.detected = True
+            self.detectionFailedCount = 0
             if len(self.recent_fits):
                 compFit = self.recent_fits[-1]
             else:
@@ -131,6 +131,7 @@ class Line:
         else:
             self.confidence = 0.
             self.detected = False
+            self.detectionFailedCount += 1
             # poor confidence in line
             self.fitLine(self.getMirroredOtherLine())
-        return self.best_fit, self.radius_of_curvature, self.detectionFailedCount
+        return self.best_fit, self.radius_of_curvature

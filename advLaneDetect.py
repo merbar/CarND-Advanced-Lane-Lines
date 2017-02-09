@@ -12,8 +12,8 @@ warpedImgSize = (500, 1500)
 #warpedImgSize = (img.shape[1], img.shape[0])
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30/warpedImgSize[1] # meters per pixel in y dimension
-xm_per_pix = 6.0/warpedImgSize[0] # meters per pixel in x dimension for 15m projection
-#xm_per_pix = 5.3/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
+xm_per_pix = 5.4/warpedImgSize[0] # meters per pixel in x dimension for 15m projection
+#xm_per_pix = 5.5/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
 #xm_per_pix = 6.2/warpedImgSize[0] # meters per pixel in x dimension for 30m projection
 slidingWindow_margin = int(warpedImgSize[0]/10)
 slidingWindow_windows = 9
@@ -25,6 +25,7 @@ fontFace = cv2.FONT_HERSHEY_DUPLEX
 fontScale = 0.7
 thickness = 1
 imgNumber = 1
+laneWidths = []
 
 lineRight = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'right')
 lineLeft = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'left')
@@ -32,7 +33,7 @@ lineRight.addOtherLine(lineLeft)
 lineLeft.addOtherLine(lineRight)
 
 def process_image(img):
-    global imgNumber
+    global imgNumber, laneWidths
     img_size = (img.shape[1], img.shape[0])
     ############################### UNDISTORT ###############################
     dstImg = cv2.undistort(img, mtx, dist, None, mtx)
@@ -82,8 +83,35 @@ def process_image(img):
     hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
     grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)
 
+
     # Isolate white and yellow
+    # enhance and equalize contrast of image first!
+    lab_l = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=0)
+    lab_a = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=1)
+    lab_b = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=2)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    lab_l_eq = clahe.apply(lab_l)
+    lab_merge = cv2.merge((lab_l_eq,lab_a,lab_b))
+    warped_dst_eq = cv2.cvtColor(lab_merge, cv2.COLOR_LAB2BGR)
+    # now do thresholds
+    hsv_equi = cv2.cvtColor(warped_dst_eq, cv2.COLOR_BGR2HSV)
     hsv = cv2.cvtColor(warped_dst, cv2.COLOR_BGR2HSV)
+    #lower_yellow = np.array([10,80,100])
+    #upper_yellow = np.array([70,255,255])
+    #lower_white = np.array([0,0,200])
+    #upper_white = np.array([255,30,255])
+    lower_yellow = np.array([10,40,100])
+    upper_yellow = np.array([40,255,255])
+    lower_white = np.array([0,0,200])
+    upper_white = np.array([255,30,255])
+    maskYellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    maskWhite = cv2.inRange(hsv_equi, lower_white, upper_white)
+    maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
+    bin_color_thresh = np.zeros_like(hls_s)
+    bin_color_thresh[maskYellowWhite > 0] = 1
+    # cut out noise on car hood
+    bin_color_thresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
+
     lower_yellow = np.array([10,80,100])
     upper_yellow = np.array([70,255,255])
     lower_white = np.array([0,0,200])
@@ -91,10 +119,18 @@ def process_image(img):
     maskYellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
     maskWhite = cv2.inRange(hsv, lower_white, upper_white)
     maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
-    bin_color_tresh = np.zeros_like(hls_s)
-    bin_color_tresh[maskYellowWhite > 0] = 1
-    # cut out noise on car hood
-    bin_color_tresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0  
+    bin_colorLessSensitive_tresh = np.zeros_like(hls_s)
+    bin_colorLessSensitive_tresh[maskYellowWhite > 0] = 1
+
+    lower_yellow = np.array([10,80,100])
+    upper_yellow = np.array([70,255,255])
+    lower_white = np.array([0,0,100])
+    upper_white = np.array([255,60,255])
+    maskYellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    maskWhite = cv2.inRange(hsv_equi, lower_white, upper_white)
+    maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
+    bin_colorMoreSensitive_tresh = np.zeros_like(hls_s)
+    bin_colorMoreSensitive_tresh[maskYellowWhite > 0] = 1
     
     bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(120,254), mode='simple')
     bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(200,255), mode='simple')
@@ -113,12 +149,17 @@ def process_image(img):
     # denoise color threshold images before combining
     bin_hsv_v_thresh = laneUtil.denoiseBinary(bin_hsv_v_thresh)
     bin_hls_s_thresh = laneUtil.denoiseBinary(bin_hls_s_thresh)
-    bin_color_tresh = laneUtil.denoiseBinary(bin_color_tresh)
+    bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
+    bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
+    bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
+    bin_color_thresh = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
+    bin_color_thresh = np.add(bin_color_thresh, bin_colorMoreSensitive_tresh)
     colorComb_bin = np.zeros_like(hls_s)
-    colorComb_bin[(bin_color_tresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
+    colorComb_bin[(bin_color_thresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
     # merge with edge detection images
     warped_bin = np.zeros_like(hls_s)
-    warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
+    #warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
+    warped_bin[(bin_color_thresh > 0)] = 1
 
     ############################### RAW IMAGE OUTPUT ###############################
     binFolder = 'vid_debug/bin'
@@ -132,8 +173,8 @@ def process_image(img):
     laneUtil.writeImg(bin_mag, outFile, binary=True)
     outFile = '{}/{}_bin_sobelX.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(bin_sobelX, outFile, binary=True)
-    outFile = '{}/{}_bin_color_tresh.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(bin_color_tresh, outFile, binary=True)
+    outFile = '{}/{}_bin_color_thresh.jpg'.format(binFolder, imgNumber)
+    laneUtil.writeImg(bin_color_thresh, outFile, binary=True)
     outFile = '{}/{}_bin_hls_s_thresh.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(bin_hls_s_thresh, outFile, binary=True)
     outFile = '{}/{}_bin_hsv_v_thresh.jpg'.format(binFolder, imgNumber)
@@ -144,12 +185,12 @@ def process_image(img):
     laneUtil.writeImg(warped_bin, outFile, binary=True)
     outFile = '{}/{}_warped_dst.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(warped_dst, outFile, binary=False)
+    outFile = '{}/{}_warped_dst_equi.jpg'.format(binFolder, imgNumber)
+    laneUtil.writeImg(warped_dst_eq, outFile, binary=False)
 
     ############################### IDENTIFY LINES ###############################
     leftCrvRad = 0
     rightCrvRad = 0
-    leftFailCount = 0
-    rightFailCount = 0
     # Left lane
     fit_left = None
     fit_right = None
@@ -159,20 +200,42 @@ def process_image(img):
         leftx_base, rightx_base = laneUtil.findLaneBases(warped_bin, xm_per_pix)
         if leftx_base:
             fit_left, data_imgLeft, leftConfidence = laneUtil.slidingWindowFit(warped_bin, leftx_base, lanePxColor=(0,0,220), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
-            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, leftConfidence)
+            best_fit_left, leftCrvRad = lineLeft.updateData(fit_left, leftConfidence)
+        else:
+            # try to mirror other line
+            best_fit_left, leftCrvRad = lineLeft.updateData(fit_left, 0.)
+            if best_fit_left == None:
+                # total failure
+                data_imgLeft = None
+                lineLeft.best_fit = None
     else:
         fit_left, data_imgLeft, leftConfidence = laneUtil.marginSearch(warped_bin, lineLeft.best_fit_f, lanePxColor=(0,0,220), margin=marginSearch_margin)
-        best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, leftConfidence)
+        best_fit_left, leftCrvRad = lineLeft.updateData(fit_left, leftConfidence)
     # Right lane
     if not lineRight.detected:
         leftx_base, rightx_base = laneUtil.findLaneBases(warped_bin, xm_per_pix)
         if rightx_base:
             fit_right, data_imgRight, rightConfidence = laneUtil.slidingWindowFit(warped_bin, rightx_base, lanePxColor=(220,0,0), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
-            best_fit_right, rightCrvRad, rightFailCount = lineRight.updateData(fit_right, rightConfidence)
+            best_fit_right, rightCrvRad = lineRight.updateData(fit_right, rightConfidence)
+        else:
+            # try to mirror other line
+            best_fit_left, leftCrvRad = lineLeft.updateData(fit_left, 0.)
+            if best_fit_left == None:
+                # total failure
+                data_imgRight = None
+                lineRight.best_fit = None
     else:
         fit_right, data_imgRight, rightConfidence = laneUtil.marginSearch(warped_bin, lineRight.best_fit_f, lanePxColor=(220,0,0), margin=marginSearch_margin)
-        best_fit_right, rightCrvRad, rightFailCount = lineRight.updateData(fit_right, rightConfidence)
+        best_fit_right, rightCrvRad = lineRight.updateData(fit_right, rightConfidence)
 
+    # update lane width in each line. This is to account for excessively thinning/widening roads and is used when projecting one line onto the other
+    laneWidthPx, laneWidthMeters = laneUtil.getLaneWidth(lineLeft.best_fit_f, lineRight.best_fit_f, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
+    laneWidths.append(laneWidthPx)
+    if len(laneWidths) > 10:
+        laneWidths = laneWidths[1:]
+    laneWidthAvg = np.average(laneWidths)
+    lineLeft.setLaneWidth(laneWidthAvg)
+    lineRight.setLaneWidth(laneWidthAvg)
     ############################### CREATE (and write) DIAGNOSTICE IMAGES ###############################
     debugFolder = 'vid_debug'
     diagImg = laneUtil.makeDiagnosticsImage(warped_bin, lineLeft, lineRight, debugFolder, imgNumber, xm_per_pix, data_imgLeft, data_imgRight)
@@ -197,7 +260,10 @@ def main():
     #clip = VideoFileClip(videoFile).subclip('00:00:41.38','00:00:41.38')
     #clip = VideoFileClip(videoFile).subclip(19,26)
     #clip = VideoFileClip(videoFile).subclip(37,43)
+    
     clip = VideoFileClip(videoFile)
+    #clip = VideoFileClip(videoFile).subclip('00:00:04.40','00:00:04.40')
+    #clip = VideoFileClip(videoFile).subclip('00:00:17.11','00:00:17.11')
     proc_clip = clip.fl_image(process_image)
     proc_output = '{}_proc.mp4'.format(videoFile.split('.')[0])
     proc_clip.write_videofile(proc_output, audio=False)

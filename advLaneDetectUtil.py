@@ -81,21 +81,20 @@ def binaryToGray(img):
     return np.uint8(255*img/np.max(img))
 
 
-def denoiseBinary(binImg, stepSize=50, noiseColumnThresh = 110):
+def denoiseBinary(binImg, stepSize=50, noiseColumnThresh = 100):
     '''
     Goes through the image in chunks to detect areas of noise and replaces them with zero. If too many chunks are noisy, image is discarded.
     Noise is defined as lots of positive values on the x-axis
     inputs: image to remove noise from
             [chunks of the image in y that get processed]
             [number of columns with a positive value to use as noise threshold]
-            []
     '''
     pixelNumThres = noiseColumnThresh
     img_size = (binImg.shape[1], binImg.shape[0])
     empty_img = np.zeros_like(binImg)
     out_img = binImg.copy()
     noiseCount = 0
-    noiseCountTresh = (img_size[0]/stepSize)*0.3
+    noiseCountTresh = (img_size[1]/stepSize)*0.5
     for y in np.arange(0, img_size[1], stepSize):
         topRange = y+stepSize
         histBinImg = np.sum(binImg[y:topRange:], axis=0)
@@ -142,7 +141,7 @@ def findLaneBases(binary_warped, xm_per_pix):
     # VERY simple sanity check
     laneWidthPx = 3.7 / xm_per_pix
     detectedLaneWidth = rightx_base - leftx_base
-    if (detectedLaneWidth > (laneWidthPx*0.85)) & (detectedLaneWidth < (laneWidthPx*1.15)):
+    if (detectedLaneWidth > (laneWidthPx*0.8)) & (detectedLaneWidth < (laneWidthPx*1.2)):
         return leftx_base, rightx_base
     else:
         return None, None
@@ -252,7 +251,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, l
     fit_f = np.poly1d(fit)
     return fit, data_img, lineConfidence(y)
 
-def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneColor=(0,150,0)):
+def marginSearch(binary_warped, fit_f, margin=50, lanePxColor=(0,0,220), laneColor=(0,150,0)):
     '''
     input: binary warped img
            curve fit function
@@ -262,6 +261,9 @@ def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneCo
     returns: return status (True/False), polyFit function for lane, image with visualizations
     based on: Udacity Project 4 lesson, unit 33
     '''
+    # Create an output image to draw on and  visualize the result
+    size = binary_warped.shape[0], binary_warped.shape[1], 3
+    data_img = np.zeros(size, dtype=np.uint8)
     nonzero = binary_warped.nonzero()
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
@@ -269,13 +271,13 @@ def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneCo
     # Again, extract line pixel positions
     x = nonzerox[lane_inds]
     y = nonzeroy[lane_inds] 
-    # Fit a second order polynomial to each
+    # early exit in edge cases
+    if len(x) == 0:
+        fit = None
+        return fit, data_img, 0.
+    # Fit a second order polynomial
     fit = np.polyfit(y, x, 2)
     fit_f = np.poly1d(fit)
-    # Visualize
-    # Create an output image to draw on and  visualize the result
-    size = binary_warped.shape[0], binary_warped.shape[1], 3
-    data_img = np.zeros(size, dtype=np.uint8)
     # Generate x and y values for plotting
     fity = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
     fit_x = fit_f(fity)
@@ -289,7 +291,10 @@ def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneCo
     # Color in line pixels
     #data_img[nonzeroy[lane_inds], nonzerox[lane_inds]] = lanePxColor
     data_img[y, x] = lanePxColor
-    return fit, data_img, lineConfidence(y)
+    confidence = lineConfidence(y)
+    if confidence < 0.25:
+        fit = None
+    return fit, data_img, confidence
 
 def getCurveRadius(fit_f, imgSizeY, xm_per_pix, ym_per_pix):
     '''
@@ -401,20 +406,21 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
     size = imgSizeY, imgSizeX, 3
     data_img = np.zeros(size, dtype=np.uint8)
     ploty = np.linspace(0, imgSizeY-1, imgSizeY)
-    fit_xLeft = lineLeft.best_fit_f(ploty)
-    fit_xRight = lineRight.best_fit_f(ploty)
-    line_window1 = np.array([np.transpose(np.vstack([fit_xLeft, ploty]))])
-    line_window2 = np.array([np.flipud(np.transpose(np.vstack([fit_xRight, ploty])))])
-    line_pts = np.hstack((line_window1, line_window2))
-    cv2.fillPoly(data_img, np.int_([line_pts]), laneColor)
+    if (lineLeft.best_fit != None) & (lineRight.best_fit != None):
+        fit_xLeft = lineLeft.best_fit_f(ploty)
+        fit_xRight = lineRight.best_fit_f(ploty)
+        line_window1 = np.array([np.transpose(np.vstack([fit_xLeft, ploty]))])
+        line_window2 = np.array([np.flipud(np.transpose(np.vstack([fit_xRight, ploty])))])
+        line_pts = np.hstack((line_window1, line_window2))
+        cv2.fillPoly(data_img, np.int_([line_pts]), laneColor)
     
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     data_img = cv2.warpPerspective(data_img, Minv, (img.shape[1], img.shape[0]))
     
     img = cv2.addWeighted(img, 1., data_img, 1., 0.)
-    
-    curvature = int(lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2
-    offCenter = getCarPositionOffCenter(lineLeft.best_fit_f, lineRight.best_fit_f, imgSizeX, imgSizeY, xm_per_pix)
-    cv2.putText(img, 'curve radius: {}m'.format(curvature), (600, 20), fontFace, fontScale,(0,255,0), thickness)
-    cv2.putText(img, 'off center: {:.1f}m'.format(offCenter), (600, 100), fontFace, fontScale,(0,255,0), thickness)
+    if (lineLeft.best_fit != None) & (lineRight.best_fit != None):
+        curvature = int(lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2
+        offCenter = getCarPositionOffCenter(lineLeft.best_fit_f, lineRight.best_fit_f, imgSizeX, imgSizeY, xm_per_pix)
+        cv2.putText(img, 'curve radius: {}m'.format(curvature), (600, 20), fontFace, fontScale,(0,255,0), thickness)
+        cv2.putText(img, 'off center: {:.1f}m'.format(offCenter), (600, 100), fontFace, fontScale,(0,255,0), thickness)
     return img
