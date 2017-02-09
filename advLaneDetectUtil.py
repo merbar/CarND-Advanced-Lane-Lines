@@ -127,7 +127,7 @@ def writeImg(img, outFile, binary=False):
     cv2.imwrite(outFile, img)
     
 
-def findLaneBases(binary_warped):
+def findLaneBases(binary_warped, xm_per_pix):
     '''
     input: binary warped img
     returns: x coordinates of estimated left/right lane bases
@@ -139,7 +139,13 @@ def findLaneBases(binary_warped):
     midpoint = np.int(histogram.shape[0]/2)
     leftx_base = np.argmax(histogram[:midpoint])
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
-    return leftx_base, rightx_base
+    # VERY simple sanity check
+    laneWidthPx = 3.7 / xm_per_pix
+    detectedLaneWidth = rightx_base - leftx_base
+    if (detectedLaneWidth > (laneWidthPx*0.85)) & (detectedLaneWidth < (laneWidthPx*1.15)):
+        return leftx_base, rightx_base
+    else:
+        return None, None
 
 def lineConfidence(lanePxY):
     confidence = np.amax(lanePxY) - np.amin(lanePxY)
@@ -232,7 +238,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, l
         
     # check if enough good points were detected for lane to be valid
     if valid_window_count < nWindowsForSuccess:
-        return False, None, data_img, 0.
+        return None, data_img, 0.
 
     # Concatenate the arrays of indices
     lane_inds = np.concatenate(lane_inds)
@@ -244,7 +250,7 @@ def slidingWindowFit(binary_warped, x_base, nwindows=9, margin=100, minpix=75, l
     # Fit a second order polynomial to each
     fit = np.polyfit(y, x, 2)
     fit_f = np.poly1d(fit)
-    return True, fit, data_img, lineConfidence(y)
+    return fit, data_img, lineConfidence(y)
 
 def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneColor=(0,150,0)):
     '''
@@ -283,7 +289,7 @@ def marginSearch(binary_warped, fit_f, margin=100, lanePxColor=(0,0,220), laneCo
     # Color in line pixels
     #data_img[nonzeroy[lane_inds], nonzerox[lane_inds]] = lanePxColor
     data_img[y, x] = lanePxColor
-    return True, fit, data_img, lineConfidence(y)
+    return fit, data_img, lineConfidence(y)
 
 def getCurveRadius(fit_f, imgSizeY, xm_per_pix, ym_per_pix):
     '''
@@ -295,14 +301,17 @@ def getCurveRadius(fit_f, imgSizeY, xm_per_pix, ym_per_pix):
     '''   
     ploty = np.linspace(0, imgSizeY-1, imgSizeY)
     # Define y-value where we want radius of curvature. Choose the maximum y-value, corresponding to the bottom of the image
-    y_eval = np.max(ploty)-50
     x = fit_f(ploty)
-
     # Fit new polynomials to x,y in world space
     fit_cr = np.polyfit(ploty*ym_per_pix, x*xm_per_pix, 2)   
     # Calculate the new radii of curvature
-    curverad = ((1 + (2*fit_cr[0]*y_eval*ym_per_pix + fit_cr[1])**2)**1.5) / np.absolute(2*fit_cr[0])
-    # Now our radius of curvature is in meters
+    y_eval1 = np.max(ploty)-20
+    curverad1 = ((1 + (2*fit_cr[0]*y_eval1*ym_per_pix + fit_cr[1])**2)**1.5) / np.absolute(2*fit_cr[0])
+    y_eval2 = np.max(ploty)-60
+    curverad2 = ((1 + (2*fit_cr[0]*y_eval2*ym_per_pix + fit_cr[1])**2)**1.5) / np.absolute(2*fit_cr[0])
+    y_eval3 = np.max(ploty)-100
+    curverad3 = ((1 + (2*fit_cr[0]*y_eval3*ym_per_pix + fit_cr[1])**2)**1.5) / np.absolute(2*fit_cr[0])
+    curverad = (curverad1 + curverad2 + curverad3) / 3
     return curverad
 
 def getCarPositionOffCenter(fit_f_left, fit_f_right, imgSizeX, imgSizeY, xm_per_pix):
@@ -332,9 +341,50 @@ def getLaneWidth(fit_f_left, fit_f_right, imgSizeX, imgSizeY, xm_per_pix):
     laneWidthMeters = laneWidthPx * xm_per_pix
     return laneWidthPx, laneWidthMeters
 
+def makeDiagnosticsImage(warped_bin, lineLeft, lineRight, debugFolder, imgNumber, xm_per_pix, data_imgLeft, data_imgRight, fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.5, thickness=1):
+    warpedImgSize = (warped_bin.shape[1], warped_bin.shape[0])
+    # prep data overlay
+    warped_bin_data = np.dstack((warped_bin, warped_bin, warped_bin))*255
+    if data_imgLeft != None:
+        # Want data from lane searches to be fully opaque. Mask out area to fill with data with black first, then overlay
+        img2gray = cv2.cvtColor(data_imgLeft,cv2.COLOR_RGB2GRAY)
+        warped_bin_data[(img2gray != 0)] = (0,0,0)
+        warped_bin_data = cv2.add(warped_bin_data, data_imgLeft)
+    if data_imgRight != None:
+        img2gray = cv2.cvtColor(data_imgRight,cv2.COLOR_RGB2GRAY)
+        warped_bin_data[(img2gray != 0)] = (0,0,0)
+        warped_bin_data = cv2.add(warped_bin_data, data_imgRight)
+
+    if lineLeft.best_fit != None:
+        fity = lineLeft.fity
+        fitx = lineLeft.best_fit_f(fity)
+        for y in range(len(fity)):
+            visCircleRad = 3
+            cv2.circle(warped_bin_data, (int(fitx[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
+        cv2.putText(warped_bin_data, 'left crv rad: {:.0f}m'.format(lineLeft.radius_of_curvature), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-60), fontFace, fontScale,(0,255,0), thickness)
+        cv2.putText(warped_bin_data, 'l coeff: {:.7f}, {:.2f}, {:.2f}'.format(lineLeft.best_fit[0], lineLeft.best_fit[1], lineLeft.best_fit[2]), (20, 100), fontFace, fontScale,(255,255,255), thickness)
+        cv2.putText(warped_bin_data, 'l conf: {:.2f}'.format(lineLeft.confidence), (20, 160), fontFace, fontScale,(255,255,255), thickness)
+    if lineRight.best_fit != None:
+        fity = lineRight.fity
+        fitx = lineRight.best_fit_f(fity)
+        for y in range(len(fity)):
+            visCircleRad = 3
+            cv2.circle(warped_bin_data, (int(fitx[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
+        cv2.putText(warped_bin_data, 'right crv rad: {:.0f}m'.format(lineRight.radius_of_curvature), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-30), fontFace, fontScale,(0,255,0), thickness)
+        cv2.putText(warped_bin_data, 'r coeff: {:.7f}, {:.2f}, {:.2f}'.format(lineRight.best_fit[0], lineRight.best_fit[1], lineRight.best_fit[2]), (20, 130), fontFace, fontScale,(255,255,255), thickness)
+        cv2.putText(warped_bin_data, 'r conf: {:.2f}'.format(lineRight.confidence), (20, 190), fontFace, fontScale,(255,255,255), thickness)
+        # General rule: if one lane has a good fit, then so does the other! At worst, it is mirrored.
+        # Calculate how far off-center the vehicle is (meters)
+        offset = getCarPositionOffCenter(lineLeft.best_fit_f, lineRight.best_fit_f, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
+        cv2.putText(warped_bin_data, 'off center: {:.1f}m'.format(offset), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-90), fontFace, fontScale,(0,255,0), thickness)
+        # Calculate lane width
+        laneWidthPx, laneWidthMeters = getLaneWidth(lineLeft.best_fit_f, lineRight.best_fit_f, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
+        cv2.putText(warped_bin_data, 'lane width: {}px = {:.1f}m'.format(laneWidthPx, laneWidthMeters), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-120), fontFace, fontScale,(0,255,0), thickness)   
+    outFile = '{}/debug.{}.jpg'.format(debugFolder, imgNumber)
+    writeImg(warped_bin_data, outFile, binary=False)
 
 
-def makeFinalDataImage(img, fit_f_left, fit_f_right, Minv, curvature, offCenter, imgSizeX, imgSizeY, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.5, thickness=1):
+def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_per_pix, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.5, thickness=1):
     '''
     inputs: original undistorted image
             function for left and right lanes
@@ -351,8 +401,8 @@ def makeFinalDataImage(img, fit_f_left, fit_f_right, Minv, curvature, offCenter,
     size = imgSizeY, imgSizeX, 3
     data_img = np.zeros(size, dtype=np.uint8)
     ploty = np.linspace(0, imgSizeY-1, imgSizeY)
-    fit_xLeft = fit_f_left(ploty)
-    fit_xRight = fit_f_right(ploty)
+    fit_xLeft = lineLeft.best_fit_f(ploty)
+    fit_xRight = lineRight.best_fit_f(ploty)
     line_window1 = np.array([np.transpose(np.vstack([fit_xLeft, ploty]))])
     line_window2 = np.array([np.flipud(np.transpose(np.vstack([fit_xRight, ploty])))])
     line_pts = np.hstack((line_window1, line_window2))
@@ -362,6 +412,9 @@ def makeFinalDataImage(img, fit_f_left, fit_f_right, Minv, curvature, offCenter,
     data_img = cv2.warpPerspective(data_img, Minv, (img.shape[1], img.shape[0]))
     
     img = cv2.addWeighted(img, 1., data_img, 1., 0.)
-    cv2.putText(img, 'curve radius: {:.0f}m'.format(curvature), (600, 20), fontFace, fontScale,(0,255,0), thickness)
+    
+    curvature = int(lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2
+    offCenter = getCarPositionOffCenter(lineLeft.best_fit_f, lineRight.best_fit_f, imgSizeX, imgSizeY, xm_per_pix)
+    cv2.putText(img, 'curve radius: {}m'.format(curvature), (600, 20), fontFace, fontScale,(0,255,0), thickness)
     cv2.putText(img, 'off center: {:.1f}m'.format(offCenter), (600, 100), fontFace, fontScale,(0,255,0), thickness)
     return img

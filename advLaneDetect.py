@@ -12,7 +12,8 @@ warpedImgSize = (500, 1500)
 #warpedImgSize = (img.shape[1], img.shape[0])
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30/warpedImgSize[1] # meters per pixel in y dimension
-xm_per_pix = 5.3/warpedImgSize[0] # meters per pixel in x dimension
+xm_per_pix = 5.3/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
+#xm_per_pix = 6.2/warpedImgSize[0] # meters per pixel in x dimension for 30m projection
 slidingWindow_margin = int(warpedImgSize[0]/10)
 slidingWindow_windows = 9
 marginSearch_margin = int(warpedImgSize[0]/10)
@@ -24,25 +25,19 @@ fontScale = 0.7
 thickness = 1
 imgNumber = 1
 
-lineRight = Line(warpedImgSize, xm_per_pix, ym_per_pix)
-lineLeft = Line(warpedImgSize, xm_per_pix, ym_per_pix)
+lineRight = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'right')
+lineLeft = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'left')
 lineRight.addOtherLine(lineLeft)
 lineLeft.addOtherLine(lineRight)
 
 def process_image(img):
     global imgNumber
-    debugFolder = 'vid_debug'
     img_size = (img.shape[1], img.shape[0])
-    # Undistort
+    ############################### UNDISTORT ###############################
     dstImg = cv2.undistort(img, mtx, dist, None, mtx)
-
-    # VISUALIZATION OUTPUT
-    binFolder = 'vid_debug/bin'
     dstImg = cv2.cvtColor(dstImg, cv2.COLOR_RGB2BGR)
-    outFile = '{}/{}_dst.jpg'.format(binFolder, imgNumber)
-    laneUtil.writeImg(dstImg, outFile, binary=False)
 
-    # Perspective transform    
+    ################################ PERSPECTIVE TRANSFORM ###############################
     # projection for 30 meters out
     src30m = np.float32(
         [[0, 670],
@@ -61,18 +56,18 @@ def process_image(img):
          [warpedImgSize[0], warpedImgSize[1]],
          [warpedImgSize[0], 0],
          [0, 0]])
-    
+    '''
     srcArr = np.array( [src], dtype=np.int32 )
     roiOverlay = np.copy(dstImg)
     roiOverlay = cv2.fillPoly(roiOverlay, srcArr, 255)
-    
+    '''
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
-
     warped_dst = cv2.warpPerspective(dstImg, M, warpedImgSize, flags=cv2.INTER_LINEAR)
-    kernel_size = 19
+      
+    ############################### IMAGE CREATION ###############################
+    kernel_size = 19  
     warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
-    
     # get useful greyscale channels
     hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)
     hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
@@ -119,7 +114,10 @@ def process_image(img):
     warped_bin = np.zeros_like(hls_s)
     warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
 
-    # VISUALIZATION OUTPUT
+    ############################### RAW IMAGE OUTPUT ###############################
+    binFolder = 'vid_debug/bin'
+    outFile = '{}/{}_dst.jpg'.format(binFolder, imgNumber)
+    laneUtil.writeImg(dstImg, outFile, binary=False)
     outFile = '{}/{}_hsv_v.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(hsv_v, outFile, binary=False)
     outFile = '{}/{}_hls_s.jpg'.format(binFolder, imgNumber)
@@ -141,134 +139,40 @@ def process_image(img):
     outFile = '{}/{}_warped_dst.jpg'.format(binFolder, imgNumber)
     laneUtil.writeImg(warped_dst, outFile, binary=False)
 
+    ############################### IDENTIFY LINES ###############################
     leftCrvRad = 0
     rightCrvRad = 0
     leftFailCount = 0
     rightFailCount = 0
-
-    # prep data overlay
-    warped_bin_data = np.dstack((warped_bin, warped_bin, warped_bin))*255
-    # Identify lanes
     # Left lane
+    fit_left = None
+    fit_right = None
+    data_imgLeft = None
+    data_imgRight = None
     if not lineLeft.detected:
-        leftx_base, rightx_base = laneUtil.findLaneBases(warped_bin)
-        ret_left, fit_left, data_img, confidence_left = laneUtil.slidingWindowFit(warped_bin, leftx_base, lanePxColor=(0,0,220), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
-        # Want data to be fully opaque. Mask out area to fill with data with black first, then overlay
-        img2gray = cv2.cvtColor(data_img,cv2.COLOR_RGB2GRAY)
-        warped_bin_data[(img2gray != 0)] = (0,0,0)
-        warped_bin_data = cv2.add(warped_bin_data, data_img)
-        if not ret_left:       
-            cv2.putText(warped_bin_data, 'left lane detection failed', (100, warpedImgSize[1]-20), fontFace, fontScale,(0,0,255), thickness)
-            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left,0.)
-        else:
-            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left,confidence_left)
-            fit_f_left = np.poly1d(best_fit_left)
-            # plot lane
-            # Generate x and y values for plotting
-            fity = lineLeft.fity
-            fit_x_left = fit_f_left(fity)
-            #fit_x_left = fit[0]*fity**2 + fit[1]*fity + fit[2]
-            for y in range(len(fity)):
-                visCircleRad = 3
-                cv2.circle(warped_bin_data, (int(fit_x_left[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
+        leftx_base, rightx_base = laneUtil.findLaneBases(warped_bin, xm_per_pix)
+        if leftx_base:
+            fit_left, data_imgLeft, leftConfidence = laneUtil.slidingWindowFit(warped_bin, leftx_base, lanePxColor=(0,0,220), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
+            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, leftConfidence)
     else:
-        ret_leftMargin, fit_left, data_img, confidence_left = laneUtil.marginSearch(warped_bin, lineLeft.best_fit_f, lanePxColor=(0,0,220), margin=marginSearch_margin)
-        # Want data to be fully opaque. Mask out area to fill with data with black first, then overlay
-        img2gray = cv2.cvtColor(data_img,cv2.COLOR_RGB2GRAY)
-        warped_bin_data[(img2gray != 0)] = (0,0,0)
-        warped_bin_data = cv2.add(warped_bin_data, data_img)
-        #warped_bin_data = cv2.addWeighted(warped_bin_data, 1., data_img, 0.5, 0.)
-        if not ret_leftMargin:
-            cv2.putText(warped_bin_data, 'left lane margin search failed', (100, warpedImgSize[1]-20), fontFace, fontScale,(0,0,255), thickness)
-            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, 0.)
-        else:
-            best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, confidence_left)
-            fit_f_left = np.poly1d(best_fit_left)
-            # plot lane
-            # Generate x and y values for plotting
-            fity = lineLeft.fity
-            fit_x_leftMargin = fit_f_left(fity)
-            for y in range(len(fity)):
-                visCircleRad = 3
-                cv2.circle(warped_bin_data, (int(fit_x_leftMargin[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
-
+        fit_left, data_imgLeft, leftConfidence = laneUtil.marginSearch(warped_bin, lineLeft.best_fit_f, lanePxColor=(0,0,220), margin=marginSearch_margin)
+        best_fit_left, leftCrvRad, leftFailCount = lineLeft.updateData(fit_left, leftConfidence)
     # Right lane
     if not lineRight.detected:
-        ret_right, fit_right, data_img, confidence_right = laneUtil.slidingWindowFit(warped_bin, rightx_base, lanePxColor=(220,0,0), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
-        img2gray = cv2.cvtColor(data_img,cv2.COLOR_RGB2GRAY)
-        warped_bin_data[(img2gray != 0)] = (0,0,0)
-        warped_bin_data = cv2.add(warped_bin_data, data_img)
-        if not ret_right:
-            cv2.putText(warped_bin_data, 'right lane detection failed', (int(warpedImgSize[0]/2)+100, warpedImgSize[1]-20), fontFace, fontScale,(0,0,255), thickness)
-            best_fit_right, rightCrvRad, rightFailCount, leftMirrored = lineRight.updateData(fit_right, 0.)
-        else:
-            best_fit_right, rightCrvRad, rightFailCount, leftMirrored = lineRight.updateData(fit_right, confidence_right)
-            fit_f_right = np.poly1d(best_fit_right)
-            # plot lane
-            # Generate x and y values for plotting
-            fity = lineRight.fity
-            fit_x_right = fit_f_right(fity)
-            for y in range(len(fity)):
-                visCircleRad = 3
-                cv2.circle(warped_bin_data, (int(fit_x_right[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
+        leftx_base, rightx_base = laneUtil.findLaneBases(warped_bin, xm_per_pix)
+        if rightx_base:
+            fit_right, data_imgRight, rightConfidence = laneUtil.slidingWindowFit(warped_bin, rightx_base, lanePxColor=(220,0,0), nwindows=slidingWindow_windows, margin=slidingWindow_margin)
+            best_fit_right, rightCrvRad, rightFailCount = lineRight.updateData(fit_right, rightConfidence)
     else:
-        ret_rightMargin, fit_right, data_img, confidence_right = laneUtil.marginSearch(warped_bin, lineRight.best_fit_f, lanePxColor=(220,0,0), margin=marginSearch_margin)
-        # Want data to be fully opaque. Mask out area to fill with data with black first, then overlay
-        img2gray = cv2.cvtColor(data_img,cv2.COLOR_RGB2GRAY)
-        warped_bin_data[(img2gray != 0)] = (0,0,0)
-        warped_bin_data = cv2.add(warped_bin_data, data_img)
-        if not ret_rightMargin:
-            cv2.putText(warped_bin_data, 'right lane margin search failed', (int(warpedImgSize[0]/2)+100, warpedImgSize[1]-20), fontFace, fontScale,(0,0,255), thickness)
-            best_fit_right, rightCrvRad, rightFailCount, rightMirrored = lineRight.updateData(fit_right, 0.)
-        else:
-            best_fit_right, rightCrvRad, rightFailCount, rightMirrored = lineRight.updateData(fit_right, confidence_right)
-            fit_f_right = np.poly1d(best_fit_right)
-            # plot lane
-            # Generate x and y values for plotting
-            fity = lineRight.fity
-            fit_x_rightMargin = fit_f_right(fity)
-            for y in range(len(fity)):
-                visCircleRad = 3
-                cv2.circle(warped_bin_data, (int(fit_x_rightMargin[y]), int(fity[y])), visCircleRad, (0,220,220), thickness=-1)
-    
-    # Calculate radius of curvature (meters)
-    cv2.putText(warped_bin_data, 'left crv rad: {:.0f}m'.format(lineLeft.radius_of_curvature), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-60), fontFace, fontScale,(0,255,0), thickness)
-    cv2.putText(warped_bin_data, 'right crv rad: {:.0f}m'.format(lineRight.radius_of_curvature), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-30), fontFace, fontScale,(0,255,0), thickness)
+        fit_right, data_imgRight, rightConfidence = laneUtil.marginSearch(warped_bin, lineRight.best_fit_f, lanePxColor=(220,0,0), margin=marginSearch_margin)
+        best_fit_right, rightCrvRad, rightFailCount = lineRight.updateData(fit_right, rightConfidence)
 
-    if rightFailCount > 0:
-        cv2.putText(warped_bin_data, 'reused', (int(warpedImgSize[0]/2)+50, warpedImgSize[1]-50), fontFace, fontScale,(255,0,0), thickness)
-    if leftFailCount > 0:
-        cv2.putText(warped_bin_data, 'reused', (50, warpedImgSize[1]-50), fontFace, fontScale,(255,0,0), thickness)
-    if rightMirrored > 0:
-        cv2.putText(warped_bin_data, 'mirrored', (int(warpedImgSize[0]/2)+50, warpedImgSize[1]-80), fontFace, fontScale,(255,0,0), thickness)
-    if leftMirrored > 0:
-        cv2.putText(warped_bin_data, 'mirrored', (50, warpedImgSize[1]-80), fontFace, fontScale,(255,0,0), thickness)
-
-    # poly coefficients
-    cv2.putText(warped_bin_data, 'l coeff: {:.7f}, {:.2f}, {:.2f}'.format(lineLeft.best_fit[0], lineLeft.best_fit[1], lineLeft.best_fit[2]), (20, 100), fontFace, fontScale,(255,255,255), thickness)
-    cv2.putText(warped_bin_data, 'r coeff: {:.7f}, {:.2f}, {:.2f}'.format(lineRight.best_fit[0], lineRight.best_fit[1], lineRight.best_fit[2]), (20, 130), fontFace, fontScale,(255,255,255), thickness)
-
-    # Calculate how far off-center the vehicle is (meters)
-    offset = laneUtil.getCarPositionOffCenter(lineLeft.best_fit_f, lineRight.best_fit_f, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
-    cv2.putText(warped_bin_data, 'off center: {:.1f}m'.format(offset), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-90), fontFace, fontScale,(0,255,0), thickness)
-
-    # Calculate lane width
-    laneWidthPx, laneWidthMeters = laneUtil.getLaneWidth(lineLeft.best_fit_f, lineRight.best_fit_f, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
-    cv2.putText(warped_bin_data, 'lane width: {}px = {:.1f}m'.format(laneWidthPx, laneWidthMeters), (int(warpedImgSize[0]/2)-100, warpedImgSize[1]-120), fontFace, fontScale,(0,255,0), thickness)
-
-    # lane confidence
-    cv2.putText(warped_bin_data, 'l conf: {:.2f}'.format(lineLeft.confidence), (20, 160), fontFace, fontScale,(255,255,255), thickness)
-    cv2.putText(warped_bin_data, 'r conf: {:.2f}'.format(lineRight.confidence), (20, 190), fontFace, fontScale,(255,255,255), thickness)
-
-    outFile = '{}/debug.{}.jpg'.format(debugFolder, imgNumber)
-    laneUtil.writeImg(warped_bin_data, outFile, binary=False)
-
-    # Plot lane and warp back to original image
-    curvature = (leftCrvRad+rightCrvRad) / 2
-    finalImg = laneUtil.makeFinalDataImage(img, fit_f_left, fit_f_right, Minv, curvature, offset, warpedImgSize[0], warpedImgSize[1])
-
+    ############################### CREATE (and write) DIAGNOSTICE IMAGES ###############################
+    debugFolder = 'vid_debug'
+    diagImg = laneUtil.makeDiagnosticsImage(warped_bin, lineLeft, lineRight, debugFolder, imgNumber, xm_per_pix, data_imgLeft, data_imgRight)
+    ############################### CREATE FINAL OUTPUT IMAGE ###############################
+    finalImg = laneUtil.makeFinalLaneImage(img, lineLeft, lineRight, Minv, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
     imgNumber += 1
-
     return finalImg
 
 
@@ -286,8 +190,8 @@ def main():
     #shadows and contrast!
     #clip = VideoFileClip(videoFile).subclip('00:00:41.38','00:00:41.38')
     #clip = VideoFileClip(videoFile).subclip(19,26)
-    clip = VideoFileClip(videoFile).subclip(37,43)
-    #clip = VideoFileClip(videoFile)
+    #clip = VideoFileClip(videoFile).subclip(37,43)
+    clip = VideoFileClip(videoFile)
     proc_clip = clip.fl_image(process_image)
     proc_output = '{}_proc.mp4'.format(videoFile.split('.')[0])
     proc_clip.write_videofile(proc_output, audio=False)
