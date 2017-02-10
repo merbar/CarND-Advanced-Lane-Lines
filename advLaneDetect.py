@@ -9,12 +9,9 @@ from advLaneDetect_line import Line
 
 # GLOBALS
 warpedImgSize = (500, 1500)
-#warpedImgSize = (img.shape[1], img.shape[0])
 # Define conversions in x and y from pixels space to meters
 ym_per_pix = 30/warpedImgSize[1] # meters per pixel in y dimension
 xm_per_pix = 5.4/warpedImgSize[0] # meters per pixel in x dimension for 15m projection
-#xm_per_pix = 5.5/warpedImgSize[0] # meters per pixel in x dimension for 20m projection
-#xm_per_pix = 6.2/warpedImgSize[0] # meters per pixel in x dimension for 30m projection
 slidingWindow_margin = int(warpedImgSize[0]/10)
 slidingWindow_windows = 9
 marginSearch_margin = int(warpedImgSize[0]/15)
@@ -24,41 +21,31 @@ laneWidths = [defaultLaneWidth]
 fontFace = cv2.FONT_HERSHEY_DUPLEX
 fontScale = 0.7
 thickness = 1
-imgNumber = 1
+img_i = 1
+imgNumberPadding = 4
 
 lineRight = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'right')
 lineLeft = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'left')
 lineRight.addOtherLine(lineLeft)
 lineLeft.addOtherLine(lineRight)
 
-outputEverything = False
+outputEverything = True
+outputCtrlCenter = True
 
 def process_image(img):
-    global imgNumber, laneWidths
+    global img_i, laneWidths
+    imgNumber = '0'*(imgNumberPadding-len(str(img_i))) + str(img_i)
     img_size = (img.shape[1], img.shape[0])
     ############################### UNDISTORT ###############################
     dstImg = cv2.undistort(img, mtx, dist, None, mtx)
     dstImg = cv2.cvtColor(dstImg, cv2.COLOR_RGB2BGR)
 
     ################################ PERSPECTIVE TRANSFORM ###############################
-    # projection for 30 meters out
-    src30m = np.float32(
-        [[0, 670],
-         [1280, 670],
-         [710, 448],
-         [570, 448]])
-    # projection for 20 meters out
-    src20m = np.float32(
-        [[30, 700],
-         [1250, 700],
-         [732, 462],
-         [548, 462]])
-    src15m = np.float32(
+    src = np.float32(
         [[30, 700],
          [1250, 700],
          [748, 475],
          [532, 475]])
-    src = src15m
     dst = np.float32(
         [[0, warpedImgSize[1]],
          [warpedImgSize[0], warpedImgSize[1]],
@@ -252,9 +239,10 @@ def process_image(img):
     outFile = '{}/diag.{}.jpg'.format(debugFolder, imgNumber)
     laneUtil.writeImg(diagImg, outFile, binary=False)
 
-    textDataImg = laneUtil.makeTextDataImage(warped_bin, lineLeft, lineRight, xm_per_pix)
-    outFile = '{}/textData.{}.jpg'.format(debugFolder, imgNumber)
-    laneUtil.writeImg(textDataImg, outFile, binary=False)
+    if outputCtrlCenter:
+        textDataImg = laneUtil.makeTextDataImage(warped_bin, lineLeft, lineRight, xm_per_pix)
+        outFile = '{}/textData.{}.jpg'.format(debugFolder, imgNumber)
+        laneUtil.writeImg(textDataImg, outFile, binary=False)
 
     ############################### CREATE FINAL OUTPUT IMAGE ###############################
     finalImg = laneUtil.makeFinalLaneImage(img, lineLeft, lineRight, Minv, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
@@ -262,12 +250,13 @@ def process_image(img):
     outFile = '{}/final.{}.jpg'.format(debugFolder, imgNumber)
     laneUtil.writeImg(finalImg, outFile, binary=False)
 
-    ############################### CREATE "CONTROL CENTER" IMAGE ###############################
-    ctrlImg = laneUtil.makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin)
-    outFile = '{}/ctrl.{}.jpg'.format(debugFolder, imgNumber)
-    laneUtil.writeImg(ctrlImg, outFile, binary=False)
+    if outputCtrlCenter:
+        ############################### CREATE "CONTROL CENTER" IMAGE ###############################
+        ctrlImg = laneUtil.makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin)
+        outFile = '{}/ctrl.{}.jpg'.format(debugFolder, imgNumber)
+        laneUtil.writeImg(ctrlImg, outFile, binary=False)
 
-    imgNumber += 1
+    img_i += 1
     return finalImg
 
 
@@ -290,8 +279,8 @@ def main():
     
     # stuff from challenge video
     #clip = VideoFileClip(videoFile).subclip('00:00:15.00','00:00:19.00')
-    #clip = VideoFileClip(videoFile).subclip('00:00:02.00','00:00:06.00')
-    clip = VideoFileClip(videoFile).subclip('00:00:17.11','00:00:17.11')
+    clip = VideoFileClip(videoFile).subclip('00:00:05.00','00:00:06.00')
+    #clip = VideoFileClip(videoFile).subclip('00:00:17.11','00:00:17.15')
     
     #clip = VideoFileClip(videoFile)
 
@@ -299,6 +288,12 @@ def main():
     proc_output = '{}_proc.mp4'.format(videoFile.split('.')[0])
     proc_clip.write_videofile(proc_output, audio=False)
 
+    if outputCtrlCenter:
+        images = glob.glob('vid_debug/ctrl.*.jpg')
+        clip = ImageSequenceClip(['image_file1.jpeg', ...])
+        proc_output = '{}_ctrl.mp4'.format(videoFile.split('.')[0])
+        clip.write_videofile("movie.mp4")
+    print('DONE')
 
 if __name__ == '__main__':
     main()

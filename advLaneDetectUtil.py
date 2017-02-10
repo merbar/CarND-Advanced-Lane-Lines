@@ -477,11 +477,17 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
         cv2.fillPoly(data_img, np.int_([line_pts]), (0,0,255))
     
     # feather the far edge
-    featherImg = np.ones(size, dtype=np.uint8)
-    # set it to 1 on bottom, 0 on top (done), interpolate in between
-    featherImg[0:610:] = 0
-    #featherImg[610:580:] = 
-    data_img = data_img * featherImg
+    featherRange = 600
+    # set it to 1 on bottom, 0 on top (done), interpolate in between (y=475 is top of ROI)
+    for y in range(0,featherRange):
+        if y==0:
+            scale = 0.0
+        else:
+            scale = y/featherRange
+        for x in range(0,imgSizeX):
+            data_img[y][x][0] = int(data_img[y][x][0] * scale)
+            data_img[y][x][1] = int(data_img[y][x][1] * scale)
+            data_img[y][x][2] = int(data_img[y][x][2] * scale)
     # Warp the blank back to original image space using inverse perspective matrix (Minv)
     data_img = cv2.warpPerspective(data_img, Minv, (img.shape[1], img.shape[0]))
 
