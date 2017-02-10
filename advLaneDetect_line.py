@@ -9,9 +9,9 @@ class Line:
         self.ym_per_pix = ym_per_pix
         # was the line detected in the last iteration?
         self.detected = False 
-        self.detectionFailedCount = 0
-        self.detectionFailedCountThresh = 5
-        self.filterSize = 6
+        self.failedDetCount = 0
+        self.failedDetCountThresh = 3
+        self.filterSize = 7
         self.poly0ChangeThresh = 0.00005
         self.poly1ChangeThresh = 0.2
         self.confidence = 0.
@@ -66,6 +66,8 @@ class Line:
                         confidenceFac = self.confidence / self.otherLine.confidence
                     else:
                         confidenceFac = 0.
+                    if confidenceFac > 1.:
+                        confidenceFac = 1.
                     fit = (confidenceFac*fit) + ((1-confidenceFac)*mirrorFit)
             # END BLEND IN MIRRORED/PREVIOUS FIT ACCORDING TO CONFIDENCE            
             self.recent_fits.append(fit)
@@ -90,8 +92,8 @@ class Line:
 
     def reusePreviousLine(self):
         # NOT USED
-        self.detectionFailedCount += 1
-        if (self.detectionFailedCount < self.detectionFailedCountThresh):
+        self.uncertainDetCount += 1
+        if (self.uncertainDetCount < self.uncertainDetCountThresh):
             self.detected = True
         else:
             self.detected = False
@@ -118,7 +120,6 @@ class Line:
         if fitConfidence > 0.:
             self.confidence = fitConfidence / self.warpedImgSize[1]# scale confidence from fit function to 0..1
             self.detected = True
-            self.detectionFailedCount = 0
             if len(self.recent_fits):
                 compFit = self.recent_fits[-1]
             else:
@@ -127,11 +128,11 @@ class Line:
             if (abs(fit[1]-compFit[1]) > self.poly1ChangeThresh) | (abs(fit[0]-compFit[0]) > self.poly0ChangeThresh):
                 # found a peaky line
                 self.confidence = 0.
-            self.fitLine(fit)
+        if self.confidence == 0.0:
+            self.failedDetCount += 1
+            if self.failedDetCount > self.failedDetCountThresh:
+                self.detected = False
         else:
-            self.confidence = 0.
-            self.detected = False
-            self.detectionFailedCount += 1
-            # poor confidence in line
-            self.fitLine(self.getMirroredOtherLine())
+            self.failedDetCount = 0
+        self.fitLine(fit)
         return self.best_fit, self.radius_of_curvature
