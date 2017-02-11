@@ -24,13 +24,14 @@ fontScale = 0.7
 thickness = 1
 img_i = 1
 imgNumberPadding = 4
+binaryMethod = 'colorOnly'
 
 lineRight = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'right')
 lineLeft = Line(warpedImgSize, xm_per_pix, ym_per_pix, 'left')
 lineRight.addOtherLine(lineLeft)
 lineLeft.addOtherLine(lineRight)
 
-outputEverything = True
+outputEverything = False
 outputCtrlCenterMov = True
 debugFolder = 'vid_debug'
 if not os.path.exists(debugFolder):
@@ -68,16 +69,15 @@ def process_image(img):
     warped_dst = cv2.warpPerspective(dstImg, M, warpedImgSize, flags=cv2.INTER_LINEAR)
       
     ############################### IMAGE CREATION ###############################
-    if outputEverything:
-        kernel_size = 19
-        warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
-        # get useful greyscale channels
-        hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)    
-        hsv_v = laneUtil.makeGrayImg(warped_dst, colorspace='hsv', useChannel=2)    
-        hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
-        hsv_v_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hsv', useChannel=2)
-        hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
-        grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)    
+    kernel_size = 19
+    warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
+    # get useful greyscale channels
+    hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)    
+    hsv_v = laneUtil.makeGrayImg(warped_dst, colorspace='hsv', useChannel=2)    
+    hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
+    hsv_v_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hsv', useChannel=2)
+    hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
+    grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)    
     # Isolate white and yellow
     # enhance and equalize contrast of image to use with white threshold
     lab_l = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=0)
@@ -92,7 +92,7 @@ def process_image(img):
     hsv = cv2.cvtColor(warped_dst, cv2.COLOR_BGR2HSV)
     # default color thresholds
     lower_yellow = np.array([10,40,100])
-    upper_yellow = np.array([40,255,255])
+    upper_yellow = np.array([70,255,255])
     lower_white = np.array([0,0,200])
     upper_white = np.array([255,30,255])
     maskYellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
@@ -125,41 +125,52 @@ def process_image(img):
     bin_colorMoreSensitive_tresh[maskYellowWhite > 0] = 1
     bin_colorMoreSensitive_tresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
     
-    if outputEverything:
-        bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(120,254), mode='simple')
-        bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(200,255), mode='simple')
-        #bin_hsv_v_mag = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(50,255), mode='mag')
-        bin_hsv_v_sobelX = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(60,120), sobel_kernel=3, mode='sobelX')
-        bin_hls_s_sobelX =laneUtil.makeBinaryImg(hls_s, threshold=(60,120), sobel_kernel=3, mode='sobelX')
-        bin_sobelX = np.zeros_like(hls_s)
-        bin_sobelX[(bin_hsv_v_sobelX > 0) | (bin_hsv_v_sobelX > 0)] = 1
-        # denoise sobelX. Can produce fine-grained noise across the image, so liberally remove it.
-        bin_sobelX = laneUtil.denoiseBinary(bin_sobelX, noiseColumnThresh=55)
+    bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(120,254), mode='simple')
+    bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(200,255), mode='simple')
+    #bin_hsv_v_mag = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(50,255), mode='mag')
+    bin_hsv_v_sobelX = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(60,120), sobel_kernel=3, mode='sobelX')
+    bin_hls_s_sobelX =laneUtil.makeBinaryImg(hls_s, threshold=(60,120), sobel_kernel=3, mode='sobelX')
+    bin_sobelX = np.zeros_like(hls_s)
+    bin_sobelX[(bin_hsv_v_sobelX > 0) | (bin_hsv_v_sobelX > 0)] = 1
+    # denoise sobelX. Can produce fine-grained noise across the image, so liberally remove it.
+    bin_sobelX = laneUtil.denoiseBinary(bin_sobelX, noiseColumnThresh=55)
 
-        bin_mag = laneUtil.makeBinaryImg(grayBlur, threshold=(100,255), sobel_kernel=3, mode='mag')
-        # cut out noise on car hood
-        bin_mag[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
+    bin_mag = laneUtil.makeBinaryImg(grayBlur, threshold=(100,255), sobel_kernel=3, mode='mag')
+    # cut out noise on car hood
+    bin_mag[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
+    bin_mag = laneUtil.denoiseBinary(bin_mag, noiseColumnThresh=45)
 
-    # denoise color threshold images before combining
-    if outputEverything:
-        bin_hsv_v_thresh = laneUtil.denoiseBinary(bin_hsv_v_thresh)
+    if binaryMethod == 'colorOnly':
+        # color images only for binary image creation
+        # denoise color threshold images before combining
+        bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
+        bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
+        bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
+        bin_color_threshComb = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
+        bin_color_threshComb = np.add(bin_color_threshComb, bin_colorMoreSensitive_tresh)
+        # combine final binary image
+        warped_bin = np.zeros_like(hls_s)
+        warped_bin[(bin_color_threshComb > 0)] = 1
+    else:
+        # previous method combining "smarter" images
+        bin_hsv_v_thresh = laneUtil.denoiseBinary(bin_hsv_v_thresh, noiseColumnThresh=80)
         bin_hls_s_thresh = laneUtil.denoiseBinary(bin_hls_s_thresh)
-    bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
-    bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
-    bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
-    bin_color_threshComb = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
-    bin_color_threshComb = np.add(bin_color_threshComb, bin_colorMoreSensitive_tresh)
-    # previous combination of binary data... replaced by use of color thresholds only
-    #colorComb_bin = np.zeros_like(hls_s)
-    #colorComb_bin[(bin_color_thresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
-    # combine final binary image
-    warped_bin = np.zeros_like(hls_s)
-    #warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
-    warped_bin[(bin_color_threshComb > 0)] = 1
+        colorComb_bin = np.zeros_like(hls_s)
+        colorComb_bin[(bin_colorLessSensitive_tresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
+        # combine final binary image
+        warped_bin = np.zeros_like(hls_s)
+        warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
 
     ############################### RAW IMAGE OUTPUT ###############################
     binFolder = 'vid_debug/bin'
     if outputEverything:
+        outFile = '{}/bin_color_thresh_default_orig.{}.jpg'.format(binFolder, imgNumber)
+        laneUtil.writeImg(dstImg, outFile, binary=False)
+        outFile = '{}/bin_color_thresh_lessSensitive_orig.{}.jpg'.format(binFolder, imgNumber)
+        laneUtil.writeImg(dstImg, outFile, binary=False)
+        outFile = '{}/bin_color_thresh_moreSensitive_orig.{}.jpg'.format(binFolder, imgNumber)
+        laneUtil.writeImg(dstImg, outFile, binary=False)
+
         outFile = '{}/dst.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(dstImg, outFile, binary=False)
         outFile = '{}/hsv_v.{}.jpg'.format(binFolder, imgNumber)
@@ -180,14 +191,13 @@ def process_image(img):
         laneUtil.writeImg(bin_hls_s_thresh, outFile, binary=True)
         outFile = '{}/bin_hsv_v_thresh.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(bin_hsv_v_thresh, outFile, binary=True)    
-        #outFile = '{}/bin_colorComb.{}.jpg'.format(binFolder, imgNumber)
-        #laneUtil.writeImg(colorComb_bin, outFile, binary=True)
         outFile = '{}/warped_dst.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(warped_dst, outFile, binary=False)
         outFile = '{}/warped_dst_equi.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(warped_dst_eq, outFile, binary=False)
         outFile = '{}/bin_final.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(warped_bin, outFile, binary=True)
+
 
     ############################### IDENTIFY LINES ###############################
     leftCrvRad = 0
@@ -261,7 +271,7 @@ def process_image(img):
         outFile = '{}/ctrl.{}.jpg'.format(debugFolder, imgNumber)
         laneUtil.writeImg(ctrlImg, outFile, binary=False)
 
-    img_i += 1
+    img_i += 1    
     return finalImg
 
 
@@ -276,7 +286,7 @@ def main():
     # straight road
     #clip = VideoFileClip(videoFile).subclip('00:00:16.15','00:00:16.15')
     # low contrast!
-    #clip = VideoFileClip(videoFile).subclip('00:00:40.00','00:00:40.00')
+    #clip = VideoFileClip(videoFile).subclip('00:00:22.30','00:00:22.30')
     #shadows and contrast!
     #clip = VideoFileClip(videoFile).subclip('00:00:41.38','00:00:41.38')
     #clip = VideoFileClip(videoFile).subclip(19,26)
@@ -285,7 +295,7 @@ def main():
     # stuff from challenge video
     #clip = VideoFileClip(videoFile).subclip('00:00:15.00','00:00:19.00')
     #clip = VideoFileClip(videoFile).subclip('00:00:05.00','00:00:06.00')
-    #clip = VideoFileClip(videoFile).subclip('00:00:17.11','00:00:17.15')
+    #clip = VideoFileClip(videoFile).subclip('00:00:05.00','00:00:05.50')
     
     clip = VideoFileClip(videoFile)
 
@@ -295,11 +305,9 @@ def main():
 
     if outputCtrlCenterMov:
         images = glob.glob('vid_debug\ctrl.*.jpg')
-        print(images)
         clip = ImageSequenceClip(images, fps=25)
         proc_output = '{}_ctrl.mp4'.format(videoFile.split('.')[0])
         clip.write_videofile(proc_output, audio=False)
-    print('DONE')
 
 if __name__ == '__main__':
     main()

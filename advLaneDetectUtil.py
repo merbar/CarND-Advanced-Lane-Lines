@@ -498,7 +498,7 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
         
     if (lineLeft.best_fit != None) & (lineRight.best_fit != None):
         curvature = int((lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2)
-        if curvature > 2500:
+        if curvature > 9000:
             curvature = 'straight'
         else:
             curvature = '{}m'.format(curvature)
