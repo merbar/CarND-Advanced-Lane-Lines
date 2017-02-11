@@ -4,8 +4,8 @@ In this project, the goal is to write a software pipeline to identify the bounda
 
 Quick links to final results:
 
-* [Project Video](https://youtu.be/pY10REs1aiY)
-* [Challenge Video](https://youtu.be/V8IzuOeJBac)
+* [Project Video](https://youtu.be/pY10REs1aiY) | [Full Data Overlay](https://youtu.be/6YX9jX93YbQ)
+* [Challenge Video](https://youtu.be/V8IzuOeJBac) | [Full Data Overlay](https://youtu.be/oNQOtD1xe84)
 
 ---
 ###Project Files
@@ -101,7 +101,7 @@ The constraints I am currently putting on the sliding-window fit are:
 - a minimum amount of one third of windows need to contain the candidate line for it to be valid
 The method returns a polynomial fit and a confidence measure. Confidence is defined by the amount of unique non-zero pixels along the y-axis and is between 0.0 and 1.0
 
-*Example line confidence. Right line covers only about 3/4 of the image in Y and has a confidence of 0.72. Whereas the right light is detected over the entire distance and has a confidence of 1.0*  
+*Example line confidence. Right line covers only about 3/4 of the image in Y and has a confidence of 0.72. Whereas the left lane is detected over the entire distance and has a confidence of 1.0*  
 ![Line confidence](output_images/lineConfidence1.jpg)
 
 Once a line has been detected, I search within a margin of the previous polynomial fit to detect the current frame's line. 
