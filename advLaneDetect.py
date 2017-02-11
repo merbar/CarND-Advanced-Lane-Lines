@@ -1,10 +1,11 @@
-import glob
+import os
 import sys
+import glob
 import numpy as np
 import cv2
 import pickle
 import advLaneDetectUtil as laneUtil
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, ImageSequenceClip
 from advLaneDetect_line import Line
 
 # GLOBALS
@@ -30,12 +31,17 @@ lineRight.addOtherLine(lineLeft)
 lineLeft.addOtherLine(lineRight)
 
 outputEverything = True
-outputCtrlCenter = True
+outputCtrlCenterMov = True
+debugFolder = 'vid_debug'
+if not os.path.exists(debugFolder):
+    os.makedirs(debugFolder)
 
 def process_image(img):
     global img_i, laneWidths
+    # take care of padding image numbers for cleaner output
     imgNumber = '0'*(imgNumberPadding-len(str(img_i))) + str(img_i)
     img_size = (img.shape[1], img.shape[0])
+
     ############################### UNDISTORT ###############################
     dstImg = cv2.undistort(img, mtx, dist, None, mtx)
     dstImg = cv2.cvtColor(dstImg, cv2.COLOR_RGB2BGR)
@@ -52,6 +58,7 @@ def process_image(img):
          [warpedImgSize[0], 0],
          [0, 0]])
     '''
+    # region of interest overlay
     srcArr = np.array( [src], dtype=np.int32 )
     roiOverlay = np.copy(dstImg)
     roiOverlay = cv2.fillPoly(roiOverlay, srcArr, 255)
@@ -61,19 +68,18 @@ def process_image(img):
     warped_dst = cv2.warpPerspective(dstImg, M, warpedImgSize, flags=cv2.INTER_LINEAR)
       
     ############################### IMAGE CREATION ###############################
-    kernel_size = 19  
-    warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
-    # get useful greyscale channels
-    hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)
-    hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
-    hsv_v = laneUtil.makeGrayImg(warped_dst, colorspace='hsv', useChannel=2)
-    hsv_v_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hsv', useChannel=2)
-    hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
-    grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)
-
-
+    if outputEverything:
+        kernel_size = 19
+        warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
+        # get useful greyscale channels
+        hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)    
+        hsv_v = laneUtil.makeGrayImg(warped_dst, colorspace='hsv', useChannel=2)    
+        hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
+        hsv_v_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hsv', useChannel=2)
+        hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
+        grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)    
     # Isolate white and yellow
-    # enhance and equalize contrast of image first!
+    # enhance and equalize contrast of image to use with white threshold
     lab_l = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=0)
     lab_a = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=1)
     lab_b = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=2)
@@ -81,13 +87,10 @@ def process_image(img):
     lab_l_eq = clahe.apply(lab_l)
     lab_merge = cv2.merge((lab_l_eq,lab_a,lab_b))
     warped_dst_eq = cv2.cvtColor(lab_merge, cv2.COLOR_LAB2BGR)
-    # now do thresholds
+    # now do thresholds. Yellow on regular hsv image, white on contrast-equalized hsv
     hsv_equi = cv2.cvtColor(warped_dst_eq, cv2.COLOR_BGR2HSV)
     hsv = cv2.cvtColor(warped_dst, cv2.COLOR_BGR2HSV)
-    #lower_yellow = np.array([10,80,100])
-    #upper_yellow = np.array([70,255,255])
-    #lower_white = np.array([0,0,200])
-    #upper_white = np.array([255,30,255])
+    # default color thresholds
     lower_yellow = np.array([10,40,100])
     upper_yellow = np.array([40,255,255])
     lower_white = np.array([0,0,200])
@@ -99,7 +102,7 @@ def process_image(img):
     bin_color_thresh[maskYellowWhite > 0] = 1
     # cut out noise on car hood
     bin_color_thresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
-
+    # less sensitive color thresholds (less noise, good for perfect conditions)
     lower_yellow = np.array([10,80,100])
     upper_yellow = np.array([70,255,255])
     lower_white = np.array([0,0,200])
@@ -109,7 +112,8 @@ def process_image(img):
     maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
     bin_colorLessSensitive_tresh = np.zeros_like(hls_s)
     bin_colorLessSensitive_tresh[maskYellowWhite > 0] = 1
-
+    bin_colorLessSensitive_tresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
+    # more sensitive color thresholds (detection of features in low-light areas, but much more noise)
     lower_yellow = np.array([10,80,100])
     upper_yellow = np.array([70,255,255])
     lower_white = np.array([0,0,100])
@@ -119,6 +123,7 @@ def process_image(img):
     maskYellowWhite = cv2.bitwise_or(maskYellow, maskWhite)
     bin_colorMoreSensitive_tresh = np.zeros_like(hls_s)
     bin_colorMoreSensitive_tresh[maskYellowWhite > 0] = 1
+    bin_colorMoreSensitive_tresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
     
     if outputEverything:
         bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(120,254), mode='simple')
@@ -142,14 +147,15 @@ def process_image(img):
     bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
     bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
     bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
-    bin_color_thresh = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
-    bin_color_thresh = np.add(bin_color_thresh, bin_colorMoreSensitive_tresh)
+    bin_color_threshComb = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
+    bin_color_threshComb = np.add(bin_color_threshComb, bin_colorMoreSensitive_tresh)
+    # previous combination of binary data... replaced by use of color thresholds only
     #colorComb_bin = np.zeros_like(hls_s)
     #colorComb_bin[(bin_color_thresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
     # combine final binary image
     warped_bin = np.zeros_like(hls_s)
     #warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
-    warped_bin[(bin_color_thresh > 0)] = 1
+    warped_bin[(bin_color_threshComb > 0)] = 1
 
     ############################### RAW IMAGE OUTPUT ###############################
     binFolder = 'vid_debug/bin'
@@ -174,8 +180,8 @@ def process_image(img):
         laneUtil.writeImg(bin_hls_s_thresh, outFile, binary=True)
         outFile = '{}/bin_hsv_v_thresh.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(bin_hsv_v_thresh, outFile, binary=True)    
-        outFile = '{}/bin_colorComb.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(colorComb_bin, outFile, binary=True)
+        #outFile = '{}/bin_colorComb.{}.jpg'.format(binFolder, imgNumber)
+        #laneUtil.writeImg(colorComb_bin, outFile, binary=True)
         outFile = '{}/warped_dst.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(warped_dst, outFile, binary=False)
         outFile = '{}/warped_dst_equi.{}.jpg'.format(binFolder, imgNumber)
@@ -234,23 +240,22 @@ def process_image(img):
         if len(laneWidths) > 10:
             laneWidths = laneWidths[1:]
     ############################### CREATE (and write) DIAGNOSTICE IMAGES ###############################
-    debugFolder = 'vid_debug'
     diagImg = laneUtil.makeDiagnosticsImage(warped_bin, lineLeft, lineRight, xm_per_pix, data_imgLeft, data_imgRight)
     outFile = '{}/diag.{}.jpg'.format(debugFolder, imgNumber)
     laneUtil.writeImg(diagImg, outFile, binary=False)
 
-    if outputCtrlCenter:
+    if outputCtrlCenterMov:
         textDataImg = laneUtil.makeTextDataImage(warped_bin, lineLeft, lineRight, xm_per_pix)
         outFile = '{}/textData.{}.jpg'.format(debugFolder, imgNumber)
         laneUtil.writeImg(textDataImg, outFile, binary=False)
 
     ############################### CREATE FINAL OUTPUT IMAGE ###############################
-    finalImg = laneUtil.makeFinalLaneImage(img, lineLeft, lineRight, Minv, warpedImgSize[0], warpedImgSize[1], xm_per_pix)
+    finalImg = laneUtil.makeFinalLaneImage(img, lineLeft, lineRight, Minv, warpedImgSize[0], warpedImgSize[1], xm_per_pix, featherEdge=False)
     finalImg = cv2.cvtColor(finalImg, cv2.COLOR_BGR2RGB)
     outFile = '{}/final.{}.jpg'.format(debugFolder, imgNumber)
     laneUtil.writeImg(finalImg, outFile, binary=False)
 
-    if outputCtrlCenter:
+    if outputCtrlCenterMov:
         ############################### CREATE "CONTROL CENTER" IMAGE ###############################
         ctrlImg = laneUtil.makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin)
         outFile = '{}/ctrl.{}.jpg'.format(debugFolder, imgNumber)
@@ -279,20 +284,21 @@ def main():
     
     # stuff from challenge video
     #clip = VideoFileClip(videoFile).subclip('00:00:15.00','00:00:19.00')
-    clip = VideoFileClip(videoFile).subclip('00:00:05.00','00:00:06.00')
+    #clip = VideoFileClip(videoFile).subclip('00:00:05.00','00:00:06.00')
     #clip = VideoFileClip(videoFile).subclip('00:00:17.11','00:00:17.15')
     
-    #clip = VideoFileClip(videoFile)
+    clip = VideoFileClip(videoFile)
 
     proc_clip = clip.fl_image(process_image)
     proc_output = '{}_proc.mp4'.format(videoFile.split('.')[0])
     proc_clip.write_videofile(proc_output, audio=False)
 
-    if outputCtrlCenter:
-        images = glob.glob('vid_debug/ctrl.*.jpg')
-        clip = ImageSequenceClip(['image_file1.jpeg', ...])
+    if outputCtrlCenterMov:
+        images = glob.glob('vid_debug\ctrl.*.jpg')
+        print(images)
+        clip = ImageSequenceClip(images, fps=25)
         proc_output = '{}_ctrl.mp4'.format(videoFile.split('.')[0])
-        clip.write_videofile("movie.mp4")
+        clip.write_videofile(proc_output, audio=False)
     print('DONE')
 
 if __name__ == '__main__':

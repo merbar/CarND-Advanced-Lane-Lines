@@ -115,7 +115,7 @@ def denoiseBinary(binImg, stepSize=50, noiseColumnThresh = 100):
         if (len(set(np.unique(nonzeroX_histBin))) > noiseColumnThresh) & (len(nonzeroX_histBin) > pixelNumThres):
             out_img[y:topRange:] = 0
             noiseCount +=1
-    # if more than 1/3 of image is noisy, throw it out
+    # if more than 1/2 of image is noisy, throw it out
     if noiseCount > noiseCountTresh:
         return empty_img
     else:
@@ -413,6 +413,7 @@ def makeTextDataImage(warped_bin, lineLeft, lineRight, xm_per_pix, fontFace=cv2.
     return data_img
 
 def makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin):
+    finalImg = cv2.cvtColor(finalImg, cv2.COLOR_RGB2BGR)
     imgSize = (750, 1280 , 3)
     ctrl_img = np.zeros(imgSize, dtype=np.uint8)
     #ctrl_img = ctrl_img + (30,30,30)
@@ -442,7 +443,7 @@ def makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin):
     cv2.putText(ctrl_img, 'lane detection', (1000,25), cv2.FONT_HERSHEY_DUPLEX, 1, (255,255,255), 1, lineType=cv2.LINE_AA)
     return ctrl_img
 
-def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_per_pix, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.9, thickness=1):
+def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_per_pix, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.9, thickness=1, featherEdge=False):
     '''
     inputs: original undistorted image
             function for left and right lanes
@@ -476,26 +477,27 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
         line_pts = np.hstack((line_window1, line_window2))
         cv2.fillPoly(data_img, np.int_([line_pts]), (0,0,255))
     
-    # feather the far edge
-    featherRange = 600
-    # set it to 1 on bottom, 0 on top (done), interpolate in between (y=475 is top of ROI)
-    for y in range(0,featherRange):
-        if y==0:
-            scale = 0.0
-        else:
-            scale = y/featherRange
-        for x in range(0,imgSizeX):
-            data_img[y][x][0] = int(data_img[y][x][0] * scale)
-            data_img[y][x][1] = int(data_img[y][x][1] * scale)
-            data_img[y][x][2] = int(data_img[y][x][2] * scale)
-    # Warp the blank back to original image space using inverse perspective matrix (Minv)
+    if featherEdge:
+        # feather the far edge... BUT THIS IS CURRENTLY RIDICULOUSLY SLOW. Need to somehow do this in numpy
+        featherRange = 600
+        # set it to 1 on bottom, 0 on top (done), interpolate in between (y=475 is top of ROI)
+        for y in range(0,featherRange):
+            if y==0:
+                scale = 0.0
+            else:
+                scale = y/featherRange
+            for x in range(0,imgSizeX):
+                data_img[y][x][0] = int(data_img[y][x][0] * scale)
+                data_img[y][x][1] = int(data_img[y][x][1] * scale)
+                data_img[y][x][2] = int(data_img[y][x][2] * scale)
+        # Warp the blank back to original image space using inverse perspective matrix (Minv)
     data_img = cv2.warpPerspective(data_img, Minv, (img.shape[1], img.shape[0]))
 
     img = cv2.addWeighted(img, 1., data_img, 0.3, 0.)
     cv2.ellipse(img, (int(img.shape[1]/2),105), (220,65), 0, 0, 360, (50,50,50), -1, lineType=cv2.LINE_AA)
         
     if (lineLeft.best_fit != None) & (lineRight.best_fit != None):
-        curvature = int(lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2
+        curvature = int((lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2)
         if curvature > 2500:
             curvature = 'straight'
         else:
@@ -508,8 +510,9 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
         
         cv2.putText(img, 'curve radius: {}'.format(curvature), (int(img.shape[1]/2)-165, 100), fontFace, fontScale,(255,255,255), thickness, lineType=cv2.LINE_AA)
         cv2.putText(img, 'off center: {}'.format(offCenter), (int(img.shape[1]/2)-130, 130), fontFace, fontScale,(255,255,255), thickness, lineType=cv2.LINE_AA)
-    '''
+    
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    '''
     outFile = 'vid_debug/final.jpg'
     writeImg(img, outFile, binary=False)
     '''

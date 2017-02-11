@@ -56,7 +56,7 @@ class Line:
                 prevFit = None
                 prevFit = self.getPreviousLine()
                 if (self.confidence < self.otherLine.confidence) & (self.otherLine.confidence > self.confidenceThresh):
-                    mirrorFit = self.getMirroredOtherLine()
+                   mirrorFit = self.getMirroredOtherLine()
                 if ((prevFit != None) & (self.confidence < 0.3)): 
                     fit = prevFit
                 if (mirrorFit != None):
@@ -77,12 +77,13 @@ class Line:
             self.best_fit_f = np.poly1d(self.best_fit)
             self.radius_of_curvature = laneUtil.getCurveRadius(self.best_fit_f, self.warpedImgSize[1], self.xm_per_pix, self.ym_per_pix)
         else:
-            # all broken down
-            # if fit is None, it means:
-            # - it went all the way back to slidingWindows detection and that failed
-            # - mirroring the other lane failed as well because that one didn't have a valid detection
-            self.recent_fits = []
-            self.best_fit = None
+            # try to mirror, otherwise break down
+            if (self.otherLine.confidence > 0.):
+                mirrorFit = self.getMirroredOtherLine()
+                fit = mirrorFit
+            else:
+                self.recent_fits = []
+                self.best_fit = None
 
     def getPreviousLine(self):
         if len(self.recent_fits):
