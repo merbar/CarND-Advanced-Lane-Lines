@@ -11,33 +11,33 @@ def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
     '''
     # color space conversion
     if colorspace == 'gray':
-        img = cv2.cvtColor(img, cv2.COLOR_BGRGRAY)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGRGRAY)
     elif colorspace == 'hsv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     elif colorspace == 'hls':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
     elif colorspace == 'lab':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
     elif colorspace == 'luv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2LUV)
     elif colorspace == 'yuv':
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
     else: 
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        cvt_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     # isolate channel
     if colorspace != 'gray':
-        img = img[:,:,useChannel]     
+        cvt_img = cvt_img[:,:,useChannel]     
 
     # apply image mask
     if mask is not None:
-        imgMask = np.zeros_like(img)    
+        imgMask = np.zeros_like(cvt_img)    
         ignore_mask_color = 255
         # filling pixels inside the polygon defined by "vertices" with the fill color    
         cv2.fillPoly(imgMask, mask, ignore_mask_color)
         # returning the image only where mask pixels are nonzero
-        img = cv2.bitwise_and(img, imgMask)
-    return img
+        cvt_img = cv2.bitwise_and(cvt_img, imgMask)
+    return cvt_img
                 
 def makeBinaryImg(img, threshold=(0,255), mode='simple', sobel_kernel=7):
     '''
