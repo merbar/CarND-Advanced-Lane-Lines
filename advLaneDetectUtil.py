@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 
+curvature_ar = []
+
 # Create thresholded binary image
 def makeGrayImg(img, mask=None, colorspace='rgb', useChannel=0):
     '''
@@ -444,6 +446,7 @@ def makeCtrlImg(finalImg, textDataImg, diagImg, warped_bin):
     return ctrl_img
 
 def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_per_pix, laneColor=(0,255,0), fontFace=cv2.FONT_HERSHEY_DUPLEX, fontScale=0.9, thickness=1, featherEdge=False):
+    global curvature_ar
     '''
     inputs: original undistorted image
             function for left and right lanes
@@ -497,7 +500,10 @@ def makeFinalLaneImage(img, lineLeft, lineRight, Minv, imgSizeX, imgSizeY, xm_pe
     cv2.ellipse(img, (int(img.shape[1]/2),105), (220,65), 0, 0, 360, (50,50,50), -1, lineType=cv2.LINE_AA)
         
     if (lineLeft.best_fit != None) & (lineRight.best_fit != None):
-        curvature = int((lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2)
+        curvature_ar.append(min(int((lineLeft.radius_of_curvature + lineRight.radius_of_curvature) / 2), 25000))
+        if len(curvature_ar) > 30:
+            curvature_ar = curvature_ar[1:]
+        curvature = int(np.mean(curvature_ar))
         if curvature > 9000:
             curvature = 'straight'
         else:
