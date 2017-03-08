@@ -1,6 +1,6 @@
 ##**Advanced Lane Finding Project**
 
-In this project, the goal is to write a software pipeline to identify the boundaries for the current travel lane in a video.
+In this project, the goal is to write a software pipeline to identify the boundaries for the current travel lane in a monocular video input.
 
 Quick links to final results:
 
@@ -40,14 +40,14 @@ The resulting `objpoints` and `imgpoints` are fed into `cv2.calibrateCamera()` t
 Except for the distortion correction, the pipeline in the notebook is entirely out-of-date. I will discuss my pipeline for a single image based on my final video pipeline in the .py files mentioned above.
 
 ####1. Distortion correction
-The coefficients for the distortion correction are read in lines 271-272 of advLaneDetect.py. Each image is undistorted in line 45 within `process_image()`.
+Each image is undistorted within `process_image()` of `advLaneDetect.py`.
 
 *Example original / undistorted image*  
 ![Example original/undistorted image](output_images/undistort2.jpg)
 
 ####2. Perspective transform
 
-The perspective transform is carried out in lines 50-68 of `advLaneDetect.py`. I am hardcoding my region of interest in the original undistorted image and arrived at the values iteratively by making the lane lines mostly parallel in the resulting image. I am simply projecting my `src` area to the entire size of a newly created image for the perspective transform. Note that the perspective transform image has very different dimensions than the original input image in order to represent the true width and length of the road ahead more appropriately.
+I am hardcoding my region of interest in the original undistorted image and arrived at the values iteratively by making the lane lines mostly parallel in the resulting image. I am simply projecting my `src` area to the entire size of a newly created image for the perspective transform. Note that the perspective transform image has very different dimensions than the original input image in order to represent the true width and length of the road ahead more appropriately.
 ```
 src = np.float32(
         [[30, 700],
@@ -66,18 +66,16 @@ dst = np.float32(
 
 ####3. Binary image creation
 
-Binary image creation is handled in lines 72-162 of `advLaneDetect.py`. There is still a lot of optional stuff going on there which I left in the code in order to be able to get back to it for future extensions.
-
 As opposed to the original "intent" of the project, I did feature detection on the perspective transformed images. Overall results were much more robust - in particular, they were much less noisy further down the road.
 
 After using many combinations of single-channel and different Sobel thresholds which worked well in the project video, but very poorly in the challenge video, I ended up getting the most robust results out of a combination of color thresholds that are fed through a custom de-noising step.
 
-I am using Contrast Limited Adaptive Histogram Equalization on the original image to extract cleaner white lines even in low-contrast images (lines 83-88 in `advLaneDetect.py`). I am using the untouched original image to extract yellow.  
+I am using Contrast Limited Adaptive Histogram Equalization on the original image to extract cleaner white lines even in low-contrast images. I am using the untouched original image to extract yellow.  
 Three different color binary images are created, each with different levels of sensitivity. The lower sensitivity works well in perfect road conditions. The medium sensitivity is more likely to detect yellow, while the high threshold is very sensitive to white. Under normal road conditions, the latter is full of noise (and thus ignored), but adds valuable features in low-light/low-contrast conditions. All thresholded images are fed through a de-noising function and ultimately combined (see example below).
 
 ### 3.1. Binary image de-noising
 
-The de-noising function is in lines 86-122 of `advLaneDetectUtil.py` in `denoiseBinary()`.
+The de-noising function is in lines 88-124 of `advLaneDetectUtil.py` in `denoiseBinary()`.
 
 This is a part of the project that gave me the largest boost in performance across different road conditions, and also the part that could still use more work to make it more intelligent.  
 
@@ -92,7 +90,7 @@ Finally, all three de-noised images are added to form the final binary image.
 
 ####4. Lane-line detection and polynomial fit
 
-I used sliding-window fit for the initial detection of lanes, lines 154-238 in `advLaneDetectUtil.py` in `slidingWindowFit()`. To get a reasonable starting point, I am dividing the left and right halves of the binary image and look for histogram spikes - implemented in lines 131-148 of `advLaneDetectUtil.py` in `findLaneBases()`. From there, I simply traverse up the candidate line.  
+I used sliding-window fit for the initial detection of lanes. To get a reasonable starting point, I am dividing the left and right halves of the binary image and look for histogram spikes. From there, I simply traverse up the candidate line.  
 
 The constraints I am currently putting on the sliding-window fit are:
 - there are nine windows total
@@ -106,11 +104,11 @@ The method returns a polynomial fit and a confidence measure. Confidence is defi
 
 Once a line has been detected, I search within a margin of the previous polynomial fit to detect the current frame's line. 
 
-The result is fed to the left or right instance of the line class for further processing (via `updateData()` in `advLaneDetect_line.py`). I am performing one more sanity check for peaky lines in line 129 of `advLaneDetect_line` where I am limiting the change of the first and second polynomial coefficient, which can turn the confidence of the line to zero.
+The result is fed to the left or right instance of the line class for further processing (via `updateData()` in `advLaneDetect_line.py`). I am performing one more sanity check for peaky lines where I am limiting the change of the first and second polynomial coefficient, which can turn the confidence of the line to zero.
 
 Finally:
 - if the confidence is above the given threshold of 0.6, use it without change
-- if it is below threshold, blend in a mix of the previous fit and a mirrored version of the opposing line's fit. The influence of the mirrored fit will grow depending on how small the confidence in the current line is compared to the confidence in the opposite line (line 66).
+- if it is below threshold, blend in a mix of the previous fit and a mirrored version of the opposing line's fit. The influence of the mirrored fit will grow depending on how small the confidence in the current line is compared to the confidence in the opposite line.
 
 The current frame's best fit is then averaged over the past seven frames.
 
@@ -119,15 +117,15 @@ The current frame's best fit is then averaged over the past seven frames.
 
 ####5. Radius of curvature / Car position off-center
 
-Both are entirely straight forward. Car position compared to center-of-lane is implemented in lines 324-335 of `advLaneDetectUtil.py` in `getCarPositionOffCenter()`.
+Both are entirely straight forward. Car position compared to center-of-lane is implemented in `getCarPositionOffCenter()` of `advLaneDetectUtil.py`.
 
-The curve radius for each line is computed in lines 301-322 of `advLaneDetectUtil.py` in `getCurveRadius()`. The final curve radius is the average of both.
+The curve radius for each line is computed in `getCurveRadius()` of `advLaneDetectUtil.py`. The final curve radius is the average of both.
 
 ![Data output image](output_images/dataOutput1.jpg)
 
 ####6. Final image output
 
-Final image output is implemented in lines 446-519 of `advLaneDetectUtil.py` in `makeFinalLaneImage()`. It plots the left and right line, fills a polygon, and does the inverse perspective projection via `cv2.warpPerspective()` to map it back onto the original image
+Final image output is implemented in `makeFinalLaneImage()` of `advLaneDetectUtil.py`. It plots the left and right line, fills a polygon, and does the inverse perspective projection via `cv2.warpPerspective()` to map it back onto the original image
 
 ![Final output image](output_images/finalOutput1.jpg)
 
