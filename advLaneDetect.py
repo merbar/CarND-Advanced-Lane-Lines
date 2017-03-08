@@ -58,26 +58,15 @@ def process_image(img):
          [warpedImgSize[0], warpedImgSize[1]],
          [warpedImgSize[0], 0],
          [0, 0]])
-    '''
-    # region of interest overlay
-    srcArr = np.array( [src], dtype=np.int32 )
-    roiOverlay = np.copy(dstImg)
-    roiOverlay = cv2.fillPoly(roiOverlay, srcArr, 255)
-    '''
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
     warped_dst = cv2.warpPerspective(dstImg, M, warpedImgSize, flags=cv2.INTER_LINEAR)
       
     ############################### IMAGE CREATION ###############################
-    kernel_size = 19
-    warped_dstImgBlur = cv2.GaussianBlur(warped_dst, (kernel_size, kernel_size), 0)
     # get useful greyscale channels
     hls_s = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=2)    
     hsv_v = laneUtil.makeGrayImg(warped_dst, colorspace='hsv', useChannel=2)    
     hls_l = laneUtil.makeGrayImg(warped_dst, colorspace='hls', useChannel=1)
-    hsv_v_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hsv', useChannel=2)
-    hls_s_blur = laneUtil.makeGrayImg(warped_dstImgBlur, colorspace='hls', useChannel=2)
-    grayBlur = cv2.cvtColor(warped_dstImgBlur, cv2.COLOR_RGB2GRAY)    
     # Isolate white and yellow
     # enhance and equalize contrast of image to use with white threshold
     lab_l = laneUtil.makeGrayImg(warped_dst, colorspace='lab', useChannel=0)
@@ -124,73 +113,32 @@ def process_image(img):
     bin_colorMoreSensitive_tresh = np.zeros_like(hls_s)
     bin_colorMoreSensitive_tresh[maskYellowWhite > 0] = 1
     bin_colorMoreSensitive_tresh[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
-    
-    bin_hls_s_thresh = laneUtil.makeBinaryImg(hls_s, threshold=(120,254), mode='simple')
-    bin_hsv_v_thresh = laneUtil.makeBinaryImg(hsv_v, threshold=(200,255), mode='simple')
-    #bin_hsv_v_mag = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(50,255), mode='mag')
-    bin_hsv_v_sobelX = laneUtil.makeBinaryImg(hsv_v_blur, threshold=(60,120), sobel_kernel=3, mode='sobelX')
-    bin_hls_s_sobelX =laneUtil.makeBinaryImg(hls_s, threshold=(60,120), sobel_kernel=3, mode='sobelX')
-    bin_sobelX = np.zeros_like(hls_s)
-    bin_sobelX[(bin_hsv_v_sobelX > 0) | (bin_hsv_v_sobelX > 0)] = 1
-    # denoise sobelX. Can produce fine-grained noise across the image, so liberally remove it.
-    bin_sobelX = laneUtil.denoiseBinary(bin_sobelX, noiseColumnThresh=55)
-
-    bin_mag = laneUtil.makeBinaryImg(grayBlur, threshold=(100,255), sobel_kernel=3, mode='mag')
-    # cut out noise on car hood
-    bin_mag[int(warpedImgSize[1]-35):int(warpedImgSize[1]):] = 0
-    bin_mag = laneUtil.denoiseBinary(bin_mag, noiseColumnThresh=45)
-
-    if binaryMethod == 'colorOnly':
         # color images only for binary image creation
-        # denoise color threshold images before combining
-        bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
-        bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
-        bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
-        bin_color_threshComb = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
-        bin_color_threshComb = np.add(bin_color_threshComb, bin_colorMoreSensitive_tresh)
-        # combine final binary image
-        warped_bin = np.zeros_like(hls_s)
-        warped_bin[(bin_color_threshComb > 0)] = 1
-    else:
-        # previous method combining "smarter" images
-        bin_hsv_v_thresh = laneUtil.denoiseBinary(bin_hsv_v_thresh, noiseColumnThresh=80)
-        bin_hls_s_thresh = laneUtil.denoiseBinary(bin_hls_s_thresh)
-        colorComb_bin = np.zeros_like(hls_s)
-        colorComb_bin[(bin_colorLessSensitive_tresh > 0) | (bin_hsv_v_thresh > 0) | (bin_hls_s_thresh > 0)] = 1
-        # combine final binary image
-        warped_bin = np.zeros_like(hls_s)
-        warped_bin[(colorComb_bin > 0) | (bin_mag > 0) | (bin_sobelX > 0)] = 1
+    # denoise color threshold images before combining
+    bin_color_thresh = laneUtil.denoiseBinary(bin_color_thresh)
+    bin_colorLessSensitive_tresh = laneUtil.denoiseBinary(bin_colorLessSensitive_tresh)
+    bin_colorMoreSensitive_tresh = laneUtil.denoiseBinary(bin_colorMoreSensitive_tresh)
+    bin_color_threshComb = np.add(bin_color_thresh, bin_colorLessSensitive_tresh) # fills in previously denoised areas
+    bin_color_threshComb = np.add(bin_color_threshComb, bin_colorMoreSensitive_tresh)
+    # combine final binary image
+    warped_bin = np.zeros_like(hls_s)
+    warped_bin[(bin_color_threshComb > 0)] = 1
 
     ############################### RAW IMAGE OUTPUT ###############################
     binFolder = 'vid_debug/bin'
     if outputEverything:
-        outFile = '{}/bin_color_thresh_default_orig.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(dstImg, outFile, binary=False)
-        outFile = '{}/bin_color_thresh_lessSensitive_orig.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(dstImg, outFile, binary=False)
-        outFile = '{}/bin_color_thresh_moreSensitive_orig.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(dstImg, outFile, binary=False)
-
         outFile = '{}/dst.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(dstImg, outFile, binary=False)
         outFile = '{}/hsv_v.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(hsv_v, outFile, binary=False)
         outFile = '{}/hls_s.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(hls_s, outFile, binary=False)
-        outFile = '{}/bin_mag.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(bin_mag, outFile, binary=True)
-        outFile = '{}/bin_sobelX.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(bin_sobelX, outFile, binary=True)
         outFile = '{}/bin_color_thresh_default.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(bin_color_thresh, outFile, binary=True)
         outFile = '{}/bin_color_thresh_lessSensitive.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(bin_colorLessSensitive_tresh, outFile, binary=True)
         outFile = '{}/bin_color_thresh_moreSensitive.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(bin_colorMoreSensitive_tresh, outFile, binary=True)
-        outFile = '{}/bin_hls_s_thresh.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(bin_hls_s_thresh, outFile, binary=True)
-        outFile = '{}/bin_hsv_v_thresh.{}.jpg'.format(binFolder, imgNumber)
-        laneUtil.writeImg(bin_hsv_v_thresh, outFile, binary=True)    
         outFile = '{}/warped_dst.{}.jpg'.format(binFolder, imgNumber)
         laneUtil.writeImg(warped_dst, outFile, binary=False)
         outFile = '{}/warped_dst_equi.{}.jpg'.format(binFolder, imgNumber)

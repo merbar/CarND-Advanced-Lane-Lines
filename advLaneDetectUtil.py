@@ -150,6 +150,9 @@ def findLaneBases(binary_warped, xm_per_pix, laneWidthPx):
         return None, None
 
 def lineConfidence(lanePxY):
+    '''
+    returns how many pixels in Y a detected line actually covers. Not really a confidence measure, but some integer based on image size...
+    '''
     confidence = np.amax(lanePxY) - np.amin(lanePxY)
     return confidence
 
