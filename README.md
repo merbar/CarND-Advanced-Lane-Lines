@@ -1,4 +1,4 @@
-##**Advanced Lane Finding Project**
+## Advanced Lane Finding Project
 
 In this project, the goal is to write a software pipeline to identify the boundaries for the current travel lane in a monocular video input.
 
@@ -8,7 +8,7 @@ Quick links to final results:
 * [Challenge Video](https://youtu.be/V8IzuOeJBac) | [Full Data Overlay](https://youtu.be/oNQOtD1xe84)
 
 ---
-###Project Files
+### Project Files
 
 I implemented the initial pipeline in a notebook (`Advanced_lane_lines.ipynb`). This was used to work on single test images and includes image undistortion. The distortion coefficients are pickled (`cameraCalibration.pickle`) and reused in the video pipeline below.  
 
@@ -26,7 +26,7 @@ python advLaneDetect.py videofile.mp4
 ```
 
 ---
-###Camera Calibration
+### Camera Calibration
 
 The code for this step is contained in the second code cell of the notebook located in `Advanced_lane_lines.ipynb`.  
 
@@ -36,16 +36,16 @@ The resulting `objpoints` and `imgpoints` are fed into `cv2.calibrateCamera()` t
 
 ![undistorted checkerboard](output_images/undistort1.jpg)
 
-###Pipeline
+### Pipeline
 Except for the distortion correction, the pipeline in the notebook is entirely out-of-date. I will discuss my pipeline for a single image based on my final video pipeline in the .py files mentioned above.
 
-####1. Distortion correction
+#### 1. Distortion correction
 Each image is undistorted within `process_image()` of `advLaneDetect.py`.
 
 *Example original / undistorted image*  
 ![Example original/undistorted image](output_images/undistort2.jpg)
 
-####2. Perspective transform
+#### 2. Perspective transform
 
 I am hardcoding my region of interest in the original undistorted image and arrived at the values iteratively by making the lane lines mostly parallel in the resulting image. I am simply projecting my `src` area to the entire size of a newly created image for the perspective transform. Note that the perspective transform image has very different dimensions than the original input image in order to represent the true width and length of the road ahead more appropriately.
 ```
@@ -64,7 +64,7 @@ dst = np.float32(
 *Example undistorted / region of interest / perspective-transformed image*  
 ![Example original/region of interest/perspective-transformed image](output_images/perspTrans1.jpg)
 
-####3. Binary image creation
+#### 3. Binary image creation
 
 As opposed to the original "intent" of the project, I did feature detection on the perspective transformed images. Overall results were much more robust - in particular, they were much less noisy further down the road.
 
@@ -73,7 +73,7 @@ After using many combinations of single-channel and different Sobel thresholds w
 I am using Contrast Limited Adaptive Histogram Equalization on the original image to extract cleaner white lines even in low-contrast images. I am using the untouched original image to extract yellow.  
 Three different color binary images are created, each with different levels of sensitivity. The lower sensitivity works well in perfect road conditions. The medium sensitivity is more likely to detect yellow, while the high threshold is very sensitive to white. Under normal road conditions, the latter is full of noise (and thus ignored), but adds valuable features in low-light/low-contrast conditions. All thresholded images are fed through a de-noising function and ultimately combined (see example below).
 
-### 3.1. Binary image de-noising
+##### 3.1. Binary image de-noising
 
 The de-noising function is in lines 88-124 of `advLaneDetectUtil.py` in `denoiseBinary()`.
 
@@ -88,7 +88,7 @@ Finally, all three de-noised images are added to form the final binary image.
 *Example low/medium/high sensitivity and de-noised/combined binary image*  
 ![Binary image creation](output_images/binary1.jpg)
 
-####4. Lane-line detection and polynomial fit
+#### 4. Lane-line detection and polynomial fit
 
 I used sliding-window fit for the initial detection of lanes. To get a reasonable starting point, I am dividing the left and right halves of the binary image and look for histogram spikes. From there, I simply traverse up the candidate line.  
 
@@ -115,7 +115,7 @@ The current frame's best fit is then averaged over the past seven frames.
 *Sliding Window Fit (left) and Margin Search (right)*  
 ![Curve polynomial fit](output_images/crvFit1.jpg)
 
-####5. Radius of curvature / Car position off-center
+#### 5. Radius of curvature / Car position off-center
 
 Both are entirely straight forward. Car position compared to center-of-lane is implemented in `getCarPositionOffCenter()` of `advLaneDetectUtil.py`.
 
@@ -123,7 +123,7 @@ The curve radius for each line is computed in `getCurveRadius()` of `advLaneDete
 
 ![Data output image](output_images/dataOutput1.jpg)
 
-####6. Final image output
+#### 6. Final image output
 
 Final image output is implemented in `makeFinalLaneImage()` of `advLaneDetectUtil.py`. It plots the left and right line, fills a polygon, and does the inverse perspective projection via `cv2.warpPerspective()` to map it back onto the original image
 
@@ -131,7 +131,7 @@ Final image output is implemented in `makeFinalLaneImage()` of `advLaneDetectUti
 
 ---
 
-###Final videos
+### Final videos
 
 1. Project Video
   * [Lane Detection](https://youtu.be/pY10REs1aiY)
@@ -143,7 +143,7 @@ Final image output is implemented in `makeFinalLaneImage()` of `advLaneDetectUti
 
 ---
 
-###Discussion
+### Discussion
 
 I ended up spending a lot of my time on the binary images in order to get the best possible input data. I initally settled on a mix of different color and Sobel images to get a rock-solid solution in the project video (I was already using my de-noise function at that point). However, that approach completely failed in the challenge video. I went back to the data to analyze frame-by-frame (with many images written out per-frame for debugging) and ended up with my approach that only uses the color thresholds and aggressive de-noising. The rest of the code stayed mostly unchanged and ended up solving the challenge video fairly well.
 
